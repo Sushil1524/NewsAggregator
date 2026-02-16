@@ -39,9 +39,17 @@ async def _get_articles_helper(
     elif date_filter == "last_hour":
         hour_ago = datetime.utcnow() - timedelta(hours=1)
         query["created_at"] = {"$gte": hour_ago}
+    elif date_filter == "week":
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        query["created_at"] = {"$gte": week_ago}
+    elif date_filter == "month":
+        month_ago = datetime.utcnow() - timedelta(days=30)
+        query["created_at"] = {"$gte": month_ago}
 
-    if sort_by == "top":
+    if sort_by == "top" or sort_by == "hot":
         sort = [("upvotes", -1), ("created_at", -1)]
+    elif sort_by == "views":
+        sort = [("views", -1), ("created_at", -1)]
     elif sort_by == "old":
         sort = [("created_at", 1)]
     else:  
@@ -56,7 +64,7 @@ async def _get_articles_helper(
             title=article["title"],
             url=article.get("url") or "",
             image_url=article.get("image_url"),
-            summary=article.get("summary"),
+            summary=article.get("summary") or "Click to read the full story.",
             category=article.get("category"),
             sentiment=article.get("sentiment"),
             tags=article.get("tags", []),
@@ -93,8 +101,8 @@ async def list_articles(
     limit: int = Query(20, ge=1, le=100),
     category: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
-    sort_by: str = Query("new", pattern="^(new|old|top)$"),
-    date_filter: Optional[str] = Query(None, pattern="^(today|last_hour)$"),
+    sort_by: str = Query("new", pattern="^(new|old|top|hot|views)$"),
+    date_filter: Optional[str] = Query(None, pattern="^(today|last_hour|week|month)$"),
 ):
     return await _get_articles_helper(cursor, limit, category, tag, sort_by, date_filter)
 

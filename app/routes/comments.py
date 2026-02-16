@@ -69,7 +69,7 @@ async def get_comments(article_id: str):
         CommentResponse(
             id=str(c["_id"]),
             article_id=c["article_id"],
-            author_username=c["author_username"],
+            author_username=c.get("author_username", "Anonymous"),
             content=c["content"],
             parent_id=c.get("parent_id"),
             upvotes=c.get("upvotes", 0),

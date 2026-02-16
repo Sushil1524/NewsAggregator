@@ -28,7 +28,7 @@ class Settings:
         self.huggingface_sentiment_model: str = os.getenv("HUGGINGFACE_SENTIMENT_MODEL", "distilbert-base-uncased-finetuned-sst-2-english")
         self.huggingface_classification_model: str = os.getenv("HUGGINGFACE_CLASSIFICATION_MODEL", "MoritzLaurer/DeBERTa-v3-base-mnli-xnli")
 
-        self.rss_fetch_interval_minutes: int = int(os.getenv("RSS_FETCH_INTERVAL_MINUTES", "15"))
+        self.rss_fetch_interval_minutes: int = int(os.getenv("RSS_FETCH_INTERVAL_MINUTES", "660"))
         self.max_articles_per_fetch: int = int(os.getenv("MAX_ARTICLES_PER_FETCH", "50"))
 
         self.rss_feeds: List[str] = [
