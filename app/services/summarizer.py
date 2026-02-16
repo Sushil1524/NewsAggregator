@@ -1,6 +1,7 @@
 import aiohttp
 from typing import List
 from app.config import get_settings
+from app.utils.helpers import categorize_article
 
 settings = get_settings()
 HF_API = "https://api-inference.huggingface.co/models/"
@@ -100,7 +101,9 @@ async def classify_text(text: str, candidate_labels: List[str]) -> str:
          async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status != 200:
-                    return "Other"
+                    if resp.status != 410:
+                        print(f"Classification API Error: {resp.status}")
+                    return categorize_article(text, "")
                 
                 result = await resp.json()
                    
@@ -110,9 +113,11 @@ async def classify_text(text: str, candidate_labels: List[str]) -> str:
                     if labels and scores:
                         return labels[0]
                 
+                print(f"Classification unexpected result: {result}")
                 return "Other"
-    except Exception:
-        return "Other"
+    except Exception as e:
+        print(f"Classification Exception: {e}")
+        return categorize_article(text, "")
 
 def _keyword_sentiment(text: str) -> str:
     text_lower = text.lower()

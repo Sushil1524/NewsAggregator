@@ -1,10 +1,10 @@
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from datetime import datetime
 from app.dependencies import get_current_user_required
 from app.models.user import UserResponse, VocabCard
-from app.db import get_supabase
+from app.db import get_users_collection
 
 router = APIRouter()
 
@@ -20,31 +20,35 @@ class VocabProgress(BaseModel):
 
 @router.get("/today", response_model=List[VocabCard])
 async def get_today_vocab(current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
-    result = supabase.table("users").select("vocab_cards, daily_practice_target").eq("id", current_user.id).execute()
-    if not result.data:
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
         return []
-    cards = result.data[0].get("vocab_cards", [])
-    target = result.data[0].get("daily_practice_target", 10)
+        
+    cards = user.get("vocab_cards", [])
+    target = user.get("daily_practice_target", 10)
     sorted_cards = sorted(cards, key=lambda x: x.get("level", 1))
     return [VocabCard(**c) for c in sorted_cards[:target]]
 
 @router.post("/practice/done")
 async def practice_done(practice_data: PracticeComplete, current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
-    result = supabase.table("users").select("vocab_cards, gamification").eq("id", current_user.id).execute()
-    if not result.data:
-        return {"message": "User not found"}
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
-    cards = result.data[0].get("vocab_cards", [])
-    gamification = result.data[0].get("gamification", {})
+    cards = user.get("vocab_cards", [])
+    gamification = user.get("gamification", {})
     
-    for card in cards:
-        if card.get("word") in practice_data.words:
-            card["level"] = min(5, card.get("level", 1) + 1)
+    card_map = {c.get("word"): c for c in cards}
+    for word in practice_data.words:
+        if word in card_map:
+            card_map[word]["level"] = min(5, card_map[word].get("level", 1) + 1)
     
     points_earned = len(practice_data.words) * 5 + practice_data.time_spent_minutes
     gamification["points"] = gamification.get("points", 0) + points_earned
+    
+    gamification["total_reading_time_minutes"] = gamification.get("total_reading_time_minutes", 0) + practice_data.time_spent_minutes
     
     today = datetime.utcnow().date()
     last_practice = gamification.get("last_read_date")
@@ -60,10 +64,14 @@ async def practice_done(practice_data: PracticeComplete, current_user: UserRespo
     
     gamification["last_read_date"] = today.isoformat()
     
-    supabase.table("users").update({
-        "vocab_cards": cards,
-        "gamification": gamification
-    }).eq("id", current_user.id).execute()
+    await users_coll.update_one(
+        {"id": current_user.id},
+        {"$set": {
+            "vocab_cards": cards,
+            "gamification": gamification,
+            "updated_at": datetime.utcnow().isoformat()
+        }}
+    )
     
     return {
         "message": "Practice recorded",
@@ -73,13 +81,13 @@ async def practice_done(practice_data: PracticeComplete, current_user: UserRespo
 
 @router.get("/progress", response_model=VocabProgress)
 async def get_vocab_progress(current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
-    result = supabase.table("users").select("vocab_cards, gamification").eq("id", current_user.id).execute()
-    if not result.data:
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
         return VocabProgress(total_cards=0, cards_by_level={}, streak=0, points=0)
     
-    cards = result.data[0].get("vocab_cards", [])
-    gamification = result.data[0].get("gamification", {})
+    cards = user.get("vocab_cards", [])
+    gamification = user.get("gamification", {})
     level_counts = {}
     for card in cards:
         level = card.get("level", 1)
@@ -94,16 +102,17 @@ async def get_vocab_progress(current_user: UserResponse = Depends(get_current_us
 
 @router.post("/add")
 async def add_vocab_card(card: VocabCard, current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
-    result = supabase.table("users").select("vocab_cards").eq("id", current_user.id).execute()
-    if not result.data:
-        return {"error": "User not found"}
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
-    cards = result.data[0].get("vocab_cards", [])
-    existing = [c for c in cards if c.get("word", "").lower() == card.word.lower()]
-    if existing:
-        return {"error": "Word already exists"}
+    cards = user.get("vocab_cards", [])
+    if any(c.get("word", "").lower() == card.word.lower() for c in cards):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word already exists")
     
-    cards.append(card.model_dump())
-    supabase.table("users").update({"vocab_cards": cards}).eq("id", current_user.id).execute()
+    await users_coll.update_one(
+        {"id": current_user.id},
+        {"$push": {"vocab_cards": card.model_dump()}, "$set": {"updated_at": datetime.utcnow().isoformat()}}
+    )
     return {"message": "Card added"}

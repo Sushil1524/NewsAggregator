@@ -35,54 +35,69 @@ CATEGORIES = {
         "software", "artificial intelligence", "startup", "google", "microsoft",
         "apple", "programming", "digital", "gadget", "cyber", "robot", "browser",
         "app", "algorithm", "code", "linux", "windows", "android", "ios",
-    ],
-    "Business": [
-        "business", "economy", "market", "stock", "trade", "company", "investment",
-        "finance", "bank", "revenue", "inflation", "cpi", "sensex", "nifty",
-        "corporate", "ceo", "merger", "acquisition", "profit", "loss",
-        "manufacturing", "semiconductor",
+        "cloudflare", "amazon", "aws", "meta", "facebook", "twitter", "x.com",
+        "openai", "anthropic", "nvidia", "intel", "amd", "semiconductor",
+        "quantum", "cryptocurrency", "blockchain", "bitcoin", "ethereum",
+        "cybersecurity", "hacking", "encryption", "tech", "gadgets", "innovation",
     ],
     "Politics": [
         "government", "election", "parliament", "minister", "policy", "vote",
         "political", "democracy", "congress", "legislation", "senate", "law",
         "court", "supreme court", "president", "pm", "modi", "biden", "trump",
-        "campaign", "party",
+        "campaign", "party", "diplomacy", "treaty", "alliance", "sanctions",
+        "protest", "unrest", "corruption", "budget", "administration",
     ],
-    "Sports": [
-        "sports", "cricket", "football", "tennis", "olympics", "match", "player",
-        "championship", "tournament", "score", "medal", "cup", "league",
-        "athlete", "nba", "nfl", "fifa", "ipl",
-    ],
-    "Science": [
-        "science", "research", "study", "discovery", "space", "nasa",
-        "experiment", "scientist", "physics", "biology", "astronomy", "planet",
-        "mars", "moon", "galaxy", "telescope",
+    "Business": [
+        "business", "economy", "market", "stock", "trade", "company", "investment",
+        "finance", "bank", "revenue", "inflation", "cpi", "sensex", "nifty",
+        "corporate", "ceo", "merger", "acquisition", "profit", "loss",
+        "manufacturing", "semiconductor", "startup", "investor", "valuation",
+        "oil", "petroleum", "energy", "commodity", "export", "import", "retail",
+        "telecom", "infrastructure", "billion", "million",
     ],
     "Health": [
         "health", "medical", "doctor", "hospital", "disease", "vaccine",
         "treatment", "patient", "covid", "wellness", "virus", "cancer",
         "medicine", "nutrition", "mental health",
     ],
+    "Sports": [
+        "sports", "cricket", "football", "tennis", "olympics", "match", "player",
+        "championship", "tournament", "score", "medal", "cup", "league",
+        "athlete", "nba", "nfl", "fifa", "ipl",
+    ],
     "Entertainment": [
         "movie", "film", "music", "celebrity", "entertainment", "actor",
         "singer", "award", "hollywood", "bollywood", "cinema", "concert",
         "album", "netflix", "streaming",
     ],
-    "India": [
-        "delhi", "mumbai", "bengaluru", "chennai", "kolkata", "hyderabad",
-        "indian", "rupee", "lok sabha", "rajya sabha", "karnataka",
-        "maharashtra", "kerala",
+    "Science": [
+        "science", "research", "study", "discovery", "space", "nasa",
+        "experiment", "scientist", "physics", "biology", "astronomy", "planet",
+        "mars", "moon", "galaxy", "telescope",
     ],
-    "World": [
-        "international", "global", "united nations", "europe", "china",
-        "russia", "america", "foreign", "diplomatic", "ukraine", "war",
-        "conflict", "airport", "flight", "aviation", "protest", "border",
-        "treaty", "climate summit",
+    "Crime": [
+        "police", "crime", "murder", "arrest", "theft", "victim", "suspect",
+        "shooting", "illegal", "investigation", "court", "prison", "jail",
+    ],
+    "Education": [
+        "school", "university", "college", "student", "teacher", "education",
+        "exam", "learning", "degree", "campus", "scholarship", "academy",
     ],
     "Environment": [
         "climate", "environment", "pollution", "carbon", "renewable",
         "sustainability", "ecosystem", "wildlife", "conservation",
         "global warming", "emissions", "energy",
+    ],
+    "Travel": [
+        "travel", "tourism", "vacation", "flight", "hotel", "destination",
+        "trip", "tourist", "resort", "voyage", "airline", "passport",
+    ],
+    "Lifestyle": [
+        "fashion", "lifestyle", "food", "recipe", "home", "design", "culture",
+        "luxury", "style", "living", "wellness", "travel",
+    ],
+    "General": [
+        "general", "news", "update", "info", "public", "notice",
     ],
 }
 
@@ -101,7 +116,7 @@ def categorize_article(title: str, content: str) -> str:
         scores[category] = score
 
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "Other"
+    return best if scores[best] > 0 else "General"
 
 def estimate_reading_time(text: str, wpm: int = 200) -> int:
     if not text:

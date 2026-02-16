@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from app.dependencies import get_current_user_required, get_current_user_optional
 from app.models.user import UserResponse
 from app.models.article import ArticleResponse, ArticleListItem
-from app.db import get_articles_collection, get_user_interactions_collection, get_supabase
+from app.db import get_articles_collection, get_user_interactions_collection, get_users_collection
 from app.db import increment_view_count
 
 router = APIRouter()
@@ -28,7 +28,7 @@ async def _get_articles_helper(
             query["created_at"] = {"$lt": cursor}
     
     if category:
-        query["category"] = category
+        query["category"] = category.title()
     
     if tag:
         query["tags"] = tag
@@ -54,7 +54,7 @@ async def _get_articles_helper(
         ArticleListItem(
             id=str(article["_id"]),
             title=article["title"],
-            url=article["url"],
+            url=article.get("url") or "",
             image_url=article.get("image_url"),
             summary=article.get("summary"),
             category=article.get("category"),
@@ -121,7 +121,7 @@ async def get_personalized(limit: int = Query(20, ge=1, le=100), current_user: U
         ArticleListItem(
             id=str(article["_id"]),
             title=article["title"],
-            url=article["url"],
+            url=article.get("url") or "",
             image_url=article.get("image_url"),
             summary=article.get("summary"),
             category=article.get("category"),
@@ -153,24 +153,17 @@ async def get_article(
     if not article:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
     
-    await collection.update_one(
-        {"_id": ObjectId(article_id)},
-        {"$inc": {"views": 1}}
-    )
-    
     if current_user:
         await _track_user_interaction(current_user.id, article_id, "view")
         
-        supabase = get_supabase()
-        result = supabase.table("users").select("reading_history, gamification").eq("id", current_user.id).execute()
-        if result.data:
-            user_data = result.data[0]
-            
+        users_coll = get_users_collection()
+        user_data = await users_coll.find_one({"id": current_user.id})
+        
+        if user_data:
             history = user_data.get("reading_history", [])
             if article_id in history:
                 history.remove(article_id)
             history.insert(0, article_id)
-            supabase.table("users").update({"reading_history": history[:100]}).eq("id", current_user.id).execute()
             
             reading_time = x_reading_duration // 60 if x_reading_duration else article.get("reading_time_minutes", 5)
             gamification = user_data.get("gamification", {})
@@ -182,7 +175,8 @@ async def get_article(
             gamification["points"] = gamification.get("points", 0) + 10 + reading_time
             
             if last_read:
-                last_read_date = datetime.fromisoformat(last_read).date() if isinstance(last_read, str) else last_read
+                from datetime import date
+                last_read_date = date.fromisoformat(last_read) if isinstance(last_read, str) else last_read
                 if last_read_date == today:
                     gamification["articles_read_today"] = gamification.get("articles_read_today", 0) + 1
                 elif (today - last_read_date).days == 1:
@@ -196,12 +190,20 @@ async def get_article(
                 gamification["articles_read_today"] = 1
             
             gamification["last_read_date"] = today.isoformat()
-            supabase.table("users").update({"gamification": gamification}).eq("id", current_user.id).execute()
+            
+            await users_coll.update_one(
+                {"id": current_user.id},
+                {"$set": {
+                    "reading_history": history[:100],
+                    "gamification": gamification,
+                    "updated_at": datetime.utcnow().isoformat()
+                }}
+            )
 
     return ArticleResponse(
         id=str(article["_id"]),
         title=article["title"],
-        url=article["url"],
+        url=article.get("url") or "",
         image_url=article.get("image_url"),
         summary=article.get("summary"),
         content=article["content"],
@@ -215,7 +217,7 @@ async def get_article(
         upvotes=article.get("upvotes", 0),
         downvotes=article.get("downvotes", 0),
         comments_count=article.get("comments_count", 0),
-        views=article.get("views", 0) + 1,
+        views=article.get("views", 0),
         published_at=article.get("published_at"),
         created_at=article["created_at"],
     )
@@ -250,3 +252,11 @@ async def downvote(article_id: str, current_user: UserResponse = Depends(get_cur
 async def share_article(article_id: str, current_user: UserResponse = Depends(get_current_user_required)):
     await _track_user_interaction(current_user.id, article_id, "share")
     return {"message": "Share tracked"}
+
+@router.post("/{article_id}/view")
+async def record_view(article_id: str, x_forwarded_for: Optional[str] = Header(None)):
+    from app.db import record_view_in_redis
+    ip = x_forwarded_for.split(",")[0] if x_forwarded_for else "unknown"
+    
+    success = await record_view_in_redis(article_id, ip)
+    return {"message": "View recorded" if success else "View debounced"}

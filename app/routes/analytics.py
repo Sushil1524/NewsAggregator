@@ -10,7 +10,7 @@ import json
 
 router = APIRouter()
 
-async def _get_trending_articles(limit: int) -> List[TrendingArticle]:
+async def get_trending_articles(limit: int) -> List[TrendingArticle]:
     cache_key = f"trending:{limit}"
     cached = await cache_get(cache_key)
     if cached:
@@ -79,7 +79,7 @@ async def _get_top_categories(limit: int) -> List[CategoryStats]:
     
     return [
         CategoryStats(
-            category=r["_id"] or "Other",
+            category=r["_id"] or "General",
             article_count=r["article_count"],
             total_views=r.get("total_views", 0),
             avg_upvotes=r.get("avg_upvotes", 0),
@@ -158,7 +158,7 @@ async def _get_dashboard_stats(user_id: str, daily_target: int) -> DashboardStat
 
 @router.get("/trending", response_model=List[TrendingArticle])
 async def trending(limit: int = Query(10, ge=1, le=50)):
-    return await _get_trending_articles(limit)
+    return await get_trending_articles(limit)
 
 @router.get("/top-categories", response_model=List[CategoryStats])
 async def top_categories(limit: int = Query(5, ge=1, le=20)):

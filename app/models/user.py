@@ -41,6 +41,8 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
+    vocab_proficiency: str = "intermediate"
+    daily_practice_target: int = 10
 
 class UserInDB(UserBase):
     id: str

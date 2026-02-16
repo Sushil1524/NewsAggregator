@@ -18,6 +18,8 @@ async def connect_mongodb():
     await _database.articles.create_index([("title", "text"), ("content", "text")])
     await _database.comments.create_index("article_id")
     await _database.raw_articles.create_index("url", unique=True)
+    await _database.users.create_index("email", unique=True)
+    await _database.users.create_index("username", unique=True)
     print(f"Connected to MongoDB: {settings.mongodb_database}")
 
 async def close_mongodb():
@@ -42,6 +44,9 @@ def get_raw_articles_collection():
 
 def get_user_interactions_collection():
     return get_database().user_interactions
+
+def get_users_collection():
+    return get_database().users
 
 
 _redis_client: redis.Redis | None = None
@@ -87,6 +92,51 @@ async def increment_view_count(article_id: str) -> int:
     if client:
         return await client.incr(f"views:{article_id}")
     return 0
+
+async def record_view_in_redis(article_id: str, ip: str) -> bool:
+    client = get_redis()
+    if not client:
+        return False
+    
+    debounce_key = f"view_debounce:{article_id}:{ip}"
+    if await client.get(debounce_key):
+        return False
+    
+    await client.set(debounce_key, "1", ex=20)
+    
+    await client.sadd("pending_views_set", article_id)
+    await client.hincrby("pending_views_h", article_id, 1)
+    
+    return True
+
+async def sync_views_to_mongodb():
+    client = get_redis()
+    if not client:
+        return
+    
+    article_ids = await client.smembers("pending_views_set")
+    if not article_ids:
+        return
+    
+    articles_coll = get_articles_collection()
+    from bson import ObjectId
+    
+    for article_id in article_ids:
+        try:
+            pipe = client.pipeline()
+            pipe.hget("pending_views_h", article_id)
+            pipe.hdel("pending_views_h", article_id)
+            pipe.srem("pending_views_set", article_id)
+            results = await pipe.execute()
+            
+            count = int(results[0]) if results[0] else 0
+            if count > 0:
+                await articles_coll.update_one(
+                    {"_id": ObjectId(article_id)},
+                    {"$inc": {"views": count}}
+                )
+        except Exception as e:
+            print(f"Error syncing views for {article_id}: {e}")
 
 
 _supabase_client: Client | None = None

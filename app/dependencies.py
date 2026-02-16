@@ -1,21 +1,20 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-
 from app.utils.security import decode_token
 from app.models.user import UserResponse, Gamification
-from app.db import get_supabase
+from app.db import get_users_collection
 
 security = HTTPBearer()
 
 async def get_current_user(user_id: str) -> UserResponse:
-    supabase = get_supabase()
-    result = supabase.table("users").select("*").eq("id", user_id).execute()
+    from app.db import get_users_collection
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": user_id})
     
-    if not result.data:
+    if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
-    user = result.data[0]
     return UserResponse(
         id=user["id"],
         email=user["email"],

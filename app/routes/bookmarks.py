@@ -4,15 +4,14 @@ from bson import ObjectId
 from app.dependencies import get_current_user_required
 from app.models.user import UserResponse
 from app.models.article import ArticleListItem
-from app.db import get_supabase
-from app.db import get_articles_collection
+from app.db import get_articles_collection, get_users_collection
 
 router = APIRouter()
 
 @router.post("/{article_id}", status_code=status.HTTP_201_CREATED)
 async def add_bookmark(article_id: str, current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
     articles = get_articles_collection()
+    users_coll = get_users_collection()
     
     try:
         article = await articles.find_one({"_id": ObjectId(article_id)})
@@ -22,37 +21,38 @@ async def add_bookmark(article_id: str, current_user: UserResponse = Depends(get
     if not article:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
     
-    result = supabase.table("users").select("bookmarks").eq("id", current_user.id).execute()
-    if not result.data:
+    result = await users_coll.update_one(
+        {"id": current_user.id},
+        {"$addToSet": {"bookmarks": article_id}}
+    )
+    
+    if result.matched_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    bookmarks = result.data[0].get("bookmarks", [])
-    if article_id in bookmarks:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already bookmarked")
-    
-    bookmarks.append(article_id)
-    supabase.table("users").update({"bookmarks": bookmarks}).eq("id", current_user.id).execute()
+        
     return {"message": "Bookmark added"}
 
 @router.delete("/{article_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_bookmark(article_id: str, current_user: UserResponse = Depends(get_current_user_required)):
-    supabase = get_supabase()
-    result = supabase.table("users").select("bookmarks").eq("id", current_user.id).execute()
+    users_coll = get_users_collection()
     
-    if not result.data:
+    result = await users_coll.update_one(
+        {"id": current_user.id},
+        {"$pull": {"bookmarks": article_id}}
+    )
+    
+    if result.matched_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    bookmarks = result.data[0].get("bookmarks", [])
-    if article_id not in bookmarks:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bookmark not found")
-    
-    bookmarks.remove(article_id)
-    supabase.table("users").update({"bookmarks": bookmarks}).eq("id", current_user.id).execute()
 
 @router.get("/", response_model=List[ArticleListItem])
 async def get_bookmarks(current_user: UserResponse = Depends(get_current_user_required)):
     articles_collection = get_articles_collection()
-    bookmark_ids = current_user.bookmarks
+    users_coll = get_users_collection()
+    
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
+        return []
+        
+    bookmark_ids = user.get("bookmarks", [])
     
     if not bookmark_ids:
         return []
