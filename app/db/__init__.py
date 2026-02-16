@@ -1,0 +1,107 @@
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+import redis.asyncio as redis
+from supabase import create_client, Client
+from app.config import get_settings
+
+settings = get_settings()
+
+_mongo_client: AsyncIOMotorClient | None = None
+_database: AsyncIOMotorDatabase | None = None
+
+async def connect_mongodb():
+    global _mongo_client, _database
+    _mongo_client = AsyncIOMotorClient(settings.mongodb_url)
+    _database = _mongo_client[settings.mongodb_database]
+    
+    await _database.articles.create_index("created_at")
+    await _database.articles.create_index("category")
+    await _database.articles.create_index([("title", "text"), ("content", "text")])
+    await _database.comments.create_index("article_id")
+    await _database.raw_articles.create_index("url", unique=True)
+    print(f"Connected to MongoDB: {settings.mongodb_database}")
+
+async def close_mongodb():
+    global _mongo_client
+    if _mongo_client:
+        _mongo_client.close()
+        print("MongoDB connection closed")
+
+def get_database() -> AsyncIOMotorDatabase:
+    if _database is None:
+        raise RuntimeError("MongoDB not connected. Call connect_mongodb() first.")
+    return _database
+
+def get_articles_collection():
+    return get_database().articles
+
+def get_comments_collection():
+    return get_database().comments
+
+def get_raw_articles_collection():
+    return get_database().raw_articles
+
+def get_user_interactions_collection():
+    return get_database().user_interactions
+
+
+_redis_client: redis.Redis | None = None
+
+async def connect_redis():
+    global _redis_client
+    redis_url = settings.redis_url
+    
+    if redis_url.startswith("rediss://") and "ssl_cert_reqs" not in redis_url:
+        redis_url += "?ssl_cert_reqs=none" if "?" not in redis_url else "&ssl_cert_reqs=none"
+    
+    _redis_client = redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+    await _redis_client.ping()
+    print("Connected to Redis")
+
+async def close_redis():
+    global _redis_client
+    if _redis_client:
+        await _redis_client.close()
+        print("Redis connection closed")
+
+def get_redis() -> redis.Redis | None:
+    return _redis_client
+
+async def cache_set(key: str, value: str, expire_seconds: int = 300):
+    client = get_redis()
+    if client:
+        await client.set(key, value, ex=expire_seconds)
+
+async def cache_get(key: str) -> str | None:
+    client = get_redis()
+    if client:
+        return await client.get(key)
+    return None
+
+async def cache_delete(key: str):
+    client = get_redis()
+    if client:
+        await client.delete(key)
+
+async def increment_view_count(article_id: str) -> int:
+    client = get_redis()
+    if client:
+        return await client.incr(f"views:{article_id}")
+    return 0
+
+
+_supabase_client: Client | None = None
+
+def get_supabase() -> Client:
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(
+            settings.supabase_url,
+            settings.supabase_key
+        )
+    return _supabase_client
+
+def get_supabase_admin() -> Client:
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_service_key
+    )
