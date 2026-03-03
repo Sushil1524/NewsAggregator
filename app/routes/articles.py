@@ -16,7 +16,9 @@ async def _get_articles_helper(
     category: Optional[str],
     tag: Optional[str],
     sort_by: str,
-    date_filter: Optional[str]
+    date_filter: Optional[str],
+    location: Optional[str] = None,
+    is_breaking: Optional[bool] = None
 ) -> List[ArticleListItem]:
     collection = get_articles_collection()
     query = {}
@@ -32,6 +34,12 @@ async def _get_articles_helper(
     
     if tag:
         query["tags"] = tag
+        
+    if location:
+        query["locations"] = location
+        
+    if is_breaking is not None:
+        query["is_breaking"] = is_breaking
     
     if date_filter == "today":
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -68,6 +76,7 @@ async def _get_articles_helper(
             category=article.get("category"),
             sentiment=article.get("sentiment"),
             tags=article.get("tags", []),
+            locations=article.get("locations", []),
             source=article.get("source", "Unknown"),
             reading_time_minutes=article.get("reading_time_minutes", 5),
             is_breaking=article.get("is_breaking", False),
@@ -94,17 +103,18 @@ async def _track_user_interaction(
         "timestamp": datetime.utcnow(),
     })
 
-
 @router.get("/", response_model=List[ArticleListItem])
 async def list_articles(
     cursor: Optional[datetime] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     category: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
+    location: Optional[str] = Query(None),
+    is_breaking: Optional[bool] = Query(None),
     sort_by: str = Query("new", pattern="^(new|old|top|hot|views)$"),
     date_filter: Optional[str] = Query(None, pattern="^(today|last_hour|week|month)$"),
 ):
-    return await _get_articles_helper(cursor, limit, category, tag, sort_by, date_filter)
+    return await _get_articles_helper(cursor, limit, category, tag, sort_by, date_filter, location, is_breaking)
 
 @router.get("/personalized", response_model=List[ArticleListItem])
 async def get_personalized(limit: int = Query(20, ge=1, le=100), current_user: UserResponse = Depends(get_current_user_required)):
@@ -135,6 +145,7 @@ async def get_personalized(limit: int = Query(20, ge=1, le=100), current_user: U
             category=article.get("category"),
             sentiment=article.get("sentiment"),
             tags=article.get("tags", []),
+            locations=article.get("locations", []),
             source=article.get("source", "Unknown"),
             reading_time_minutes=article.get("reading_time_minutes", 5),
             is_breaking=article.get("is_breaking", False),
@@ -217,6 +228,7 @@ async def get_article(
         content=article["content"],
         category=article.get("category"),
         tags=article.get("tags", []),
+        locations=article.get("locations", []),
         source=article.get("source", "Unknown"),
         sentiment=article.get("sentiment"),
         difficulty_level=article.get("difficulty_level", "medium"),

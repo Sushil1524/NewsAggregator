@@ -9,7 +9,7 @@ from app.utils.helpers import clean_html, extract_tags_from_text
 
 settings = get_settings()
 
-async def fetch_feed(session: aiohttp.ClientSession, feed_url: str) -> list[dict]:
+async def fetch_feed(session: aiohttp.ClientSession, feed_url: str, feed_location: str) -> list[dict]:
     try:
         timeout = aiohttp.ClientTimeout(total=30)
         async with session.get(feed_url, timeout=timeout) as resp:
@@ -24,6 +24,8 @@ async def fetch_feed(session: aiohttp.ClientSession, feed_url: str) -> list[dict
             for entry in feed.entries[: settings.max_articles_per_fetch]:
                 article = _parse_entry(entry, source)
                 if article:
+                    if feed_location and feed_location != "Global News":
+                        article["rss_location"] = feed_location
                     articles.append(article)
 
             return articles
@@ -101,7 +103,10 @@ def _get_image(entry) -> str | None:
 
 async def fetch_all_feeds() -> list[dict]:
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_feed(session, url) for url in settings.rss_feeds]
+        tasks = []
+        for location, urls in settings.rss_feeds.items():
+            for url in urls:
+                tasks.append(fetch_feed(session, url, location))
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_articles = []
@@ -109,7 +114,8 @@ async def fetch_all_feeds() -> list[dict]:
         if isinstance(result, list):
             all_articles.extend(result)
 
-    print(f"Fetched {len(all_articles)} articles from {len(settings.rss_feeds)} feeds")
+    total_feeds = sum(len(feeds) for feeds in settings.rss_feeds.values())
+    print(f"Fetched {len(all_articles)} articles from {total_feeds} feeds")
     return all_articles
 
 async def save_raw_articles(articles: list[dict]) -> int:

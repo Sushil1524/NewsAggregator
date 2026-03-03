@@ -3,7 +3,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from app.dependencies import get_current_user_required
-from app.models.user import UserCreate, UserUpdate, UserResponse, Gamification, NotificationSettings
+from app.models.user import UserCreate, UserUpdate, UserResponse, Gamification, NotificationSettings, PushSubscription
 from app.db import get_users_collection
 from app.utils.security import hash_password, verify_password, create_tokens, decode_token
 
@@ -61,7 +61,6 @@ async def register(user_data: UserCreate):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(login_data: LoginRequest):
-    from app.db import get_users_collection
     users_coll = get_users_collection()
     
     user = await users_coll.find_one({
@@ -97,7 +96,6 @@ async def get_me(current_user: UserResponse = Depends(get_current_user_required)
 
 @router.put("/me", response_model=UserResponse)
 async def update_me(update_data: UserUpdate, current_user: UserResponse = Depends(get_current_user_required)):
-    from app.db import get_users_collection
     users_coll = get_users_collection()
     
     update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
@@ -125,9 +123,75 @@ async def update_me(update_data: UserUpdate, current_user: UserResponse = Depend
         preferred_languages=user.get("preferred_languages", ["en"]),
         gamification=Gamification(**user.get("gamification", {})),
         bookmarks=user.get("bookmarks", []),
+        joined_clubs=user.get("joined_clubs", []),
         created_at=user["created_at"],
     )
 
 @router.post("/logout")
 async def logout(current_user: UserResponse = Depends(get_current_user_required)):
     return {"message": "Successfully logged out"}
+
+@router.post("/push/subscribe")
+async def subscribe_push(sub: PushSubscription, current_user: UserResponse = Depends(get_current_user_required)):
+    users_coll = get_users_collection()
+
+    await users_coll.update_one(
+        {"id": current_user.id},
+        {"$addToSet": {"push_subscriptions": sub.model_dump()}}
+    )
+    return {"message": "Subscribed to push notifications"}
+
+@router.delete("/push/unsubscribe")
+async def unsubscribe_push(endpoint: str, current_user: UserResponse = Depends(get_current_user_required)):
+    users_coll = get_users_collection()
+
+    await users_coll.update_one(
+        {"id": current_user.id},
+        {"$pull": {"push_subscriptions": {"endpoint": endpoint}}}
+    )
+    return {"message": "Unsubscribed from push notifications"}
+
+@router.get("/me/stats")
+async def get_my_stats(current_user: UserResponse = Depends(get_current_user_required)):
+    users_coll = get_users_collection()
+    
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    g = user.get("gamification", {})
+    total_articles = g.get("total_articles_read", 0)
+    streak = g.get("streak", 0)
+    current_badges = set(g.get("badges", []))
+    new_badges = []
+    
+    if total_articles >= 10 and "Novice Reader" not in current_badges:
+        new_badges.append("Novice Reader")
+    if total_articles >= 50 and "Avid Reader" not in current_badges:
+        new_badges.append("Avid Reader")
+    if total_articles >= 100 and "Scholar" not in current_badges:
+        new_badges.append("Scholar")
+    if streak >= 7 and "Week Streak" not in current_badges:
+        new_badges.append("Week Streak")
+    if streak >= 30 and "Month Streak" not in current_badges:
+        new_badges.append("Month Streak")
+        
+    if new_badges:
+        all_badges = list(current_badges) + new_badges
+        await users_coll.update_one(
+            {"id": current_user.id},
+            {"$set": {"gamification.badges": all_badges}}
+        )
+        g["badges"] = all_badges
+        
+    stats = {
+        "points": g.get("points", 0),
+        "streak": streak,
+        "articles_read_today": g.get("articles_read_today", 0),
+        "total_articles_read": total_articles,
+        "total_reading_time_minutes": g.get("total_reading_time_minutes", 0),
+        "badges": g.get("badges", []),
+        "newly_unlocked": new_badges
+    }
+    
+    return stats

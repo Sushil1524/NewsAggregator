@@ -19,6 +19,15 @@ class VocabCard(BaseModel):
     level: int = Field(default=1, ge=1, le=5)
     added_at: datetime = Field(default_factory=datetime.utcnow)
 
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeys
+    expirationTime: Optional[int] = None
+
 class Gamification(BaseModel):
     points: int = 0
     streak: int = 0
@@ -52,11 +61,14 @@ class UserInDB(UserBase):
     daily_practice_target: int = 10
     news_preferences: Dict[str, bool] = {}
     preferred_languages: List[str] = ["en"]
+    preferred_locations: List[str] = []
     notification_settings: NotificationSettings = NotificationSettings()
     gamification: Gamification = Gamification()
     vocab_cards: List[VocabCard] = []
     bookmarks: List[str] = []
+    joined_clubs: List[str] = []
     reading_history: List[str] = []
+    push_subscriptions: List[PushSubscription] = []
     created_at: datetime
     updated_at: datetime
     last_login_at: Optional[datetime] = None
@@ -68,7 +80,9 @@ class UserUpdate(BaseModel):
     daily_practice_target: Optional[int] = None
     news_preferences: Optional[Dict[str, bool]] = None
     preferred_languages: Optional[List[str]] = None
+    preferred_locations: Optional[List[str]] = None
     notification_settings: Optional[NotificationSettings] = None
+    joined_clubs: Optional[List[str]] = None
 
 class UserResponse(BaseModel):
     id: str
@@ -81,7 +95,9 @@ class UserResponse(BaseModel):
     daily_practice_target: int = 10
     news_preferences: Dict[str, bool] = {}
     preferred_languages: List[str] = ["en"]
+    preferred_locations: List[str] = []
     gamification: Gamification = Gamification()
     bookmarks: List[str] = []
+    joined_clubs: List[str] = []
     created_at: datetime
 

@@ -28,6 +28,7 @@ async def get_current_user(user_id: str) -> UserResponse:
         preferred_languages=user.get("preferred_languages", ["en"]),
         gamification=Gamification(**user.get("gamification", {})),
         bookmarks=user.get("bookmarks", []),
+        joined_clubs=user.get("joined_clubs", []),
         created_at=user["created_at"],
     )
 

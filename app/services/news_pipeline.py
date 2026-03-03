@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from app.db import get_articles_collection
 from app.services.rss_fetcher import fetch_and_store_feeds, get_unprocessed_articles, mark_article_processed
 from app.services.summarizer import summarize_text, analyze_sentiment, classify_text
-from app.utils.helpers import estimate_reading_time, extract_tags_from_text, CATEGORIES
+from app.utils.helpers import estimate_reading_time, extract_tags_from_text, extract_locations_from_text, CATEGORIES
 
 async def process_article(raw: dict) -> dict:
     title = raw.get("title", "")
@@ -16,7 +16,22 @@ async def process_article(raw: dict) -> dict:
     category = await classify_text(f"{title} {summary}", category_labels)
 
     tags = extract_tags_from_text(f"{title} {summary}")
+    locations = extract_locations_from_text(f"{title} {summary}")
+    
+    if raw.get("rss_location") and raw["rss_location"] not in locations:
+        locations.append(raw["rss_location"])
+        
     reading_time = estimate_reading_time(content)
+
+    is_breaking = False
+    title_lower = title.lower()
+    source_lower = raw.get("source", "").lower()
+    reliable_breaking_sources = ["cnn", "al jazeera", "bbc", "reuters", "nytimes"]
+    
+    if any(s in source_lower for s in reliable_breaking_sources) and any(kw in title_lower for kw in ["live", "urgent", "breaking", "update"]):
+        is_breaking = True
+    elif "breaking:" in title_lower or "urgent:" in title_lower:
+        is_breaking = True
 
     return {
         "title": title,
@@ -27,6 +42,7 @@ async def process_article(raw: dict) -> dict:
         "category": category,
         "sentiment": sentiment,
         "tags": tags,
+        "locations": locations,
         "source": raw.get("source"),
         "published_at": raw.get("published_at"),
         "created_at": datetime.utcnow(),
@@ -35,7 +51,7 @@ async def process_article(raw: dict) -> dict:
         "upvotes": 0,
         "downvotes": 0,
         "comments_count": 0,
-        "is_breaking": False,
+        "is_breaking": is_breaking,
         "difficulty_level": "medium",
     }
 
@@ -51,6 +67,17 @@ async def run_pipeline(max_articles: int = 10):
     
     for raw in unprocessed:
         try:
+            one_day_ago = datetime.utcnow() - timedelta(days=1)
+            is_duplicate = await collection.find_one({
+                "title": raw.get("title", ""),
+                "created_at": {"$gte": one_day_ago}
+            })
+            
+            if is_duplicate:
+                print(f"Duplicate found, skipping: {raw.get('title')}")
+                await mark_article_processed(raw["url"])
+                continue
+
             processed_data = await process_article(raw)
             
             await collection.update_one(

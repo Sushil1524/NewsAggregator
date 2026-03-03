@@ -25,6 +25,7 @@ class RawArticle(BaseModel):
     source: str
     published_at: Optional[datetime] = None
     tags: List[str] = []
+    locations: List[str] = []
 
 class ArticleDB(BaseModel):
     title: str
@@ -34,6 +35,7 @@ class ArticleDB(BaseModel):
     content: str
     category: Optional[str] = None
     tags: List[str] = []
+    locations: List[str] = []
     source: str
     source_reliability: float = 0.8
     sentiment: Optional[str] = None
@@ -59,6 +61,7 @@ class ArticleListItem(BaseModel):
     category: Optional[str] = None
     sentiment: Optional[str] = None
     tags: List[str] = []
+    locations: List[str] = []
     source: str
     reading_time_minutes: int = 5
     is_breaking: bool = False
@@ -76,6 +79,7 @@ class ArticleResponse(BaseModel):
     content: str
     category: Optional[str] = None
     tags: List[str] = []
+    locations: List[str] = []
     source: str
     sentiment: Optional[str] = None
     difficulty_level: str = "medium"

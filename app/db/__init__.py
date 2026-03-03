@@ -20,6 +20,9 @@ async def connect_mongodb():
     await _database.raw_articles.create_index("url", unique=True)
     await _database.users.create_index("email", unique=True)
     await _database.users.create_index("username", unique=True)
+    await _database.clubs.create_index("slug", unique=True)
+    await _database.club_posts.create_index([("club_slug", 1), ("created_at", -1)])
+    await _database.club_comments.create_index("post_id")
     print(f"Connected to MongoDB: {settings.mongodb_database}")
 
 async def close_mongodb():
@@ -47,6 +50,15 @@ def get_user_interactions_collection():
 
 def get_users_collection():
     return get_database().users
+
+def get_clubs_collection():
+    return get_database().clubs
+
+def get_club_posts_collection():
+    return get_database().club_posts
+
+def get_club_comments_collection():
+    return get_database().club_comments
 
 
 _redis_client: redis.Redis | None = None

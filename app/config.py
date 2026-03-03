@@ -31,18 +31,27 @@ class Settings:
         self.rss_fetch_interval_minutes: int = int(os.getenv("RSS_FETCH_INTERVAL_MINUTES", "660"))
         self.max_articles_per_fetch: int = int(os.getenv("MAX_ARTICLES_PER_FETCH", "50"))
 
-        self.rss_feeds: List[str] = [
-            "https://www.theguardian.com/world/rss",
-            "https://feeds.bbci.co.uk/news/world/rss.xml",
-            "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-            "https://www.thehindu.com/news/international/feeder/default.rss",
-            # "https://www.thehindu.com/news/national/feeder/default.rss",
-            "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
-            "https://indianexpress.com/feed/",
-            "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml",
-            "https://www.ndtv.com/rss/india",
-            "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
-        ]
+        self.rss_feeds: dict[str, list[str]] = {
+            "Global News": [
+                "https://www.theguardian.com/world/rss",
+                "https://feeds.bbci.co.uk/news/world/rss.xml",
+                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+                "http://rss.cnn.com/rss/cnn_topstories.rss",
+            ],
+            "India": [
+                "https://www.thehindu.com/news/international/feeder/default.rss",
+                "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+                "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml",
+                "https://www.ndtv.com/rss/india",
+                "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
+            ],
+            "UK": [
+                "https://feeds.bbci.co.uk/news/uk/rss.xml",
+            ],
+            "USA": [
+                "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",
+            ]
+        }
 
 @lru_cache
 def get_settings() -> Settings:

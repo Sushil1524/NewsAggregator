@@ -118,6 +118,23 @@ def categorize_article(title: str, content: str) -> str:
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "General"
 
+MAJOR_LOCATIONS = [
+    "New York", "London", "Paris", "Tokyo", "Delhi", "Mumbai", "Bengaluru", 
+    "Chennai", "Kolkata", "Hyderabad", "Pune", "Ahmedabad", "Surat", "Jaipur",
+    "Washington", "Beijing", "Moscow", "Dubai", "Singapore", "Sydney", "Toronto",
+    "India", "USA", "UK", "China", "Russia", "Europe", "Australia", "Canada",
+    "Germany", "France", "Japan", "Brazil", "South Africa", "Kerala", "Maharashtra",
+    "Karnataka", "Tamil Nadu", "Gujarat", "Texas", "California", "Florida"
+]
+
+def extract_locations_from_text(text: str) -> list[str]:
+    found = []
+    text_lower = text.lower()
+    for loc in MAJOR_LOCATIONS:
+        if re.search(r'\b' + re.escape(loc.lower()) + r'\b', text_lower):
+            found.append(loc)
+    return found
+
 def estimate_reading_time(text: str, wpm: int = 200) -> int:
     if not text:
         return 1
