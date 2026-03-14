@@ -17,7 +17,7 @@ async def summarize_text(text: str) -> str:
     headers = {"Authorization": f"Bearer {settings.huggingface_api_key}"}
     payload = {
         "inputs": text[:4000],
-        "parameters": {"max_length": 150, "min_length": 40, "do_sample": False},
+        "parameters": {"max_length": 700, "min_length": 300, "do_sample": False},
         "options": {"wait_for_model": True},
     }
 

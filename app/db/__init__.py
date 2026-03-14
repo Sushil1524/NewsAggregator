@@ -1,6 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 import redis.asyncio as redis
-from supabase import create_client, Client
 from app.config import get_settings
 
 settings = get_settings()
@@ -149,21 +148,3 @@ async def sync_views_to_mongodb():
                 )
         except Exception as e:
             print(f"Error syncing views for {article_id}: {e}")
-
-
-_supabase_client: Client | None = None
-
-def get_supabase() -> Client:
-    global _supabase_client
-    if _supabase_client is None:
-        _supabase_client = create_client(
-            settings.supabase_url,
-            settings.supabase_key
-        )
-    return _supabase_client
-
-def get_supabase_admin() -> Client:
-    return create_client(
-        settings.supabase_url,
-        settings.supabase_service_key
-    )

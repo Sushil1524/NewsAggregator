@@ -14,10 +14,6 @@ class Settings:
         self.access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
         self.refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
-        self.supabase_url: str = os.getenv("SUPABASE_URL", "")
-        self.supabase_key: str = os.getenv("SUPABASE_KEY", "")
-        self.supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
-
         self.mongodb_url: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
         self.mongodb_database: str = os.getenv("MONGODB_DATABASE", "intellinews")
 

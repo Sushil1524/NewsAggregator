@@ -4,6 +4,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config import get_settings
 from app.services.news_pipeline import run_pipeline
 from app.routes.analytics import get_trending_articles
+from app.db import sync_views_to_mongodb
 
 settings = get_settings()
 scheduler = AsyncIOScheduler()
@@ -22,7 +23,6 @@ async def scheduled_trending_update():
 
 async def scheduled_view_sync():
     try:
-        from app.db import sync_views_to_mongodb
         await sync_views_to_mongodb()
     except Exception as e:
         print(f"View sync error: {e}")
