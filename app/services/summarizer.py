@@ -1,4 +1,5 @@
 import aiohttp
+import re
 from typing import List
 from app.config import get_settings
 from app.utils.helpers import categorize_article
@@ -16,8 +17,8 @@ async def summarize_text(text: str) -> str:
     url = f"{HF_API}{settings.huggingface_model}"
     headers = {"Authorization": f"Bearer {settings.huggingface_api_key}"}
     payload = {
-        "inputs": text[:4000],
-        "parameters": {"max_length": 700, "min_length": 300, "do_sample": False},
+        "inputs": text[:5000],
+        "parameters": {"max_length": 450, "min_length": 100, "do_sample": False},
         "options": {"wait_for_model": True},
     }
 
@@ -30,7 +31,17 @@ async def summarize_text(text: str) -> str:
                 result = await resp.json()
 
                 if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("summary_text", text[:500])
+                    summary = result[0].get("summary_text", text[:500]).strip()
+                    last_punctuation = max(summary.rfind('.'), summary.rfind('!'), summary.rfind('?'))
+                    
+                    if last_punctuation != -1 and last_punctuation > len(summary) * 0.3:
+                        summary = summary[:last_punctuation + 1]
+                        
+                    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+(?=[A-Z0-9])', summary) if s.strip()]
+                    if len(sentences) > 1:
+                        summary = "\n\n".join([f"• {s}" for s in sentences])
+                        
+                    return summary
 
                 return text[:500]
     except Exception:
