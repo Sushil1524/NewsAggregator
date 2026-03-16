@@ -57,6 +57,15 @@ async def process_article(raw: dict) -> dict:
 
 async def run_pipeline(max_articles: int = 10):
     print("Starting news pipeline...")
+    
+    # Demote old breaking news (older than 24 hours) loop runs every 15 min
+    articles_coll = get_articles_collection()
+    yesterday = datetime.utcnow() - timedelta(hours=24)
+    await articles_coll.update_many(
+        {"is_breaking": True, "created_at": {"$lt": yesterday}},
+        {"$set": {"is_breaking": False}}
+    )
+
     await fetch_and_store_feeds()
     
     unprocessed = await get_unprocessed_articles(limit=max_articles)
