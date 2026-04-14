@@ -11,7 +11,7 @@ scheduler = AsyncIOScheduler()
 
 async def scheduled_news_refresh():
     try:
-        await run_pipeline(max_articles=30)
+        await run_pipeline(max_articles=50)
     except Exception as e:
         print(f"Error: {e}")
 

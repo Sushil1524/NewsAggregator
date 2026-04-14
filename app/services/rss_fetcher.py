@@ -102,7 +102,10 @@ def _get_image(entry) -> str | None:
     return None
 
 async def fetch_all_feeds() -> list[dict]:
-    async with aiohttp.ClientSession() as session:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
         tasks = []
         for location, urls in settings.rss_feeds.items():
             for url in urls:
