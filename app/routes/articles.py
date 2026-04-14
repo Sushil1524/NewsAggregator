@@ -6,8 +6,7 @@ from app.dependencies import get_current_user_required, get_current_user_optiona
 from app.models.user import UserResponse
 from app.models.article import ArticleResponse, ArticleListItem
 from app.db import get_articles_collection, get_user_interactions_collection, get_users_collection
-from app.db import increment_view_count
-
+from app.db import increment_view_count, check_and_lock_vote
 router = APIRouter()
 
 async def _get_articles_helper(
@@ -244,6 +243,10 @@ async def get_article(
 
 @router.post("/{article_id}/upvote")
 async def upvote(article_id: str, current_user: UserResponse = Depends(get_current_user_required)):
+    is_allowed = await check_and_lock_vote(article_id, current_user.id, "upvote")
+    if not is_allowed:
+        raise HTTPException(status_code=400, detail="User has already voted on this article")
+        
     collection = get_articles_collection()
     result = await collection.update_one(
         {"_id": ObjectId(article_id)},
@@ -257,6 +260,10 @@ async def upvote(article_id: str, current_user: UserResponse = Depends(get_curre
 
 @router.post("/{article_id}/downvote")
 async def downvote(article_id: str, current_user: UserResponse = Depends(get_current_user_required)):
+    is_allowed = await check_and_lock_vote(article_id, current_user.id, "downvote")
+    if not is_allowed:
+        raise HTTPException(status_code=400, detail="User has already voted on this article")
+
     collection = get_articles_collection()
     result = await collection.update_one(
         {"_id": ObjectId(article_id)},

@@ -148,3 +148,18 @@ async def sync_views_to_mongodb():
                 )
         except Exception as e:
             print(f"Error syncing views for {article_id}: {e}")
+
+async def check_and_lock_vote(article_id: str, user_id: str, vote_type: str) -> bool:
+    client = get_redis()
+    if not client:
+        # print("Redis unavailable: bypassing vote lock")
+        return True
+    
+    lock_key = f"user_vote:{article_id}:{user_id}"
+    
+    existing_vote = await client.get(lock_key)
+    if existing_vote:
+        return False
+        
+    await client.set(lock_key, vote_type, ex=2592000)
+    return True

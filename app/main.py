@@ -91,4 +91,32 @@ async def root():
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    return {"status": "healthy", "database": "connected", "cache": "connected"}
+    from fastapi import HTTPException
+    status_db = "disconnected"
+    status_cache = "disconnected"
+    is_healthy = True
+
+    try:
+        from app.db import get_database, get_redis
+        db = get_database()
+        await db.command("ping")
+        status_db = "connected"
+    except Exception as e:
+        is_healthy = False
+        print(f"MongoDB health check failed: {e}")
+
+    try:
+        redis_client = get_redis()
+        if redis_client:
+            await redis_client.ping()
+            status_cache = "connected"
+        else:
+            is_healthy = False
+    except Exception as e:
+        is_healthy = False
+        print(f"Redis health check failed: {e}")
+
+    if not is_healthy:
+        raise HTTPException(status_code=503, detail={"status": "unhealthy", "database": status_db, "cache": status_cache, "app": settings.app_name})
+
+    return {"status": "healthy", "database": status_db, "cache": status_cache, "app": settings.app_name}
