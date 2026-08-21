@@ -50,21 +50,18 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
-    vocab_proficiency: str = "intermediate"
-    daily_practice_target: int = 10
+    daily_reading_target: int = 15
 
 class UserInDB(UserBase):
     id: str
     password_hash: str
     role: str = "user"
-    vocab_proficiency: str = "intermediate"
-    daily_practice_target: int = 10
+    daily_reading_target: int = 15
     news_preferences: Dict[str, bool] = {}
     preferred_languages: List[str] = ["en"]
     preferred_locations: List[str] = []
     notification_settings: NotificationSettings = NotificationSettings()
     gamification: Gamification = Gamification()
-    vocab_cards: List[VocabCard] = []
     bookmarks: List[str] = []
     joined_clubs: List[str] = []
     reading_history: List[str] = []
@@ -76,8 +73,7 @@ class UserInDB(UserBase):
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     dob: Optional[date] = None
-    vocab_proficiency: Optional[str] = None
-    daily_practice_target: Optional[int] = None
+    daily_reading_target: Optional[int] = None
     news_preferences: Optional[Dict[str, bool]] = None
     preferred_languages: Optional[List[str]] = None
     preferred_locations: Optional[List[str]] = None
@@ -91,8 +87,7 @@ class UserResponse(BaseModel):
     full_name: Optional[str] = None
     dob: Optional[date] = None
     role: str = "user"
-    vocab_proficiency: str = "intermediate"
-    daily_practice_target: int = 10
+    daily_reading_target: int = 15
     news_preferences: Dict[str, bool] = {}
     preferred_languages: List[str] = ["en"]
     preferred_locations: List[str] = []

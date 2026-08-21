@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Optional
+from uuid import uuid4
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -9,28 +10,43 @@ settings = get_settings()
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+
 
 class TokenData(BaseModel):
     user_id: str
     email: str
     token_type: str = "access"
+    jti: str = ""          # JWT ID — unique per token, used for revocation
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
-    to_encode.update({"exp": expire, "type": "access"})
+    to_encode.update({
+        "exp": expire,
+        "type": "access",
+        "jti": str(uuid4()),   # unique ID per token
+    })
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
 
 def create_refresh_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    to_encode.update({
+        "exp": expire,
+        "type": "refresh",
+        "jti": str(uuid4()),
+    })
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
 
 def decode_token(token: str) -> Optional[TokenData]:
     try:
@@ -38,13 +54,15 @@ def decode_token(token: str) -> Optional[TokenData]:
         user_id = payload.get("sub")
         email = payload.get("email")
         token_type = payload.get("type", "access")
-        
+        jti = payload.get("jti", "")
+
         if user_id is None or email is None:
             return None
-        
-        return TokenData(user_id=user_id, email=email, token_type=token_type)
+
+        return TokenData(user_id=user_id, email=email, token_type=token_type, jti=jti)
     except JWTError:
         return None
+
 
 def create_tokens(user_id: str, email: str) -> dict:
     token_data = {"sub": user_id, "email": email}

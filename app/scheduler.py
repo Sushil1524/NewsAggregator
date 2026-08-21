@@ -28,6 +28,18 @@ async def scheduled_view_sync():
         print(f"View sync error: {e}")
 
 def start_scheduler():
+    current_settings = get_settings()
+    import os
+    is_dev = current_settings.dev_mode or os.getenv("DEV_MODE", "false").strip().lower() == "true"
+
+    if is_dev:
+        print("[DEV MODE] Pipeline disabled — no article fetching, processing, or trending refresh.")
+        print("[DEV MODE] Existing DB articles are served normally.")
+        if not scheduler.running:
+            scheduler.start()
+        return
+
+    # Production: run pipeline immediately on startup, then on schedule
     asyncio.create_task(scheduled_news_refresh())
     asyncio.create_task(scheduled_trending_update())
 

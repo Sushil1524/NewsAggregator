@@ -1,23 +1,41 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from datetime import datetime
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from app.config import get_settings
 from app.db import connect_mongodb, close_mongodb, get_clubs_collection
 from app.db import connect_redis, close_redis
 from app.scheduler import start_scheduler, stop_scheduler
-from app.routes import auth, articles, comments, bookmarks, admin, analytics, vocab, clubs
-from datetime import datetime
+from app.routes import auth, articles, comments, bookmarks, admin, analytics, vocab, clubs, health
 
 settings = get_settings()
 
+# ─── Rate Limiter ──────────────────────────────────────────────────────────────
+# Global limiter — individual routes can override with their own @limiter.limit()
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.dev_mode:
+        print("")
+        print("╔══════════════════════════════════════════════════╗")
+        print("║          IntelliNews — DEV MODE ACTIVE           ║")
+        print("║  Pipeline: DISABLED  |  Auth & API: ENABLED      ║")
+        print("║  Existing articles served normally from DB       ║")
+        print("╚══════════════════════════════════════════════════╝")
+        print("")
     await connect_mongodb()
     try:
         await connect_redis()
     except Exception:
         pass
-    
+
     await seed_clubs()
     start_scheduler()
     yield
@@ -51,7 +69,7 @@ async def seed_clubs():
     if existing_count > 0:
         print(f"Clubs already seeded ({existing_count} clubs found).")
         return
-    
+
     now = datetime.utcnow()
     for club_data in CLUB_SEED_DATA:
         await clubs_coll.insert_one({
@@ -61,12 +79,18 @@ async def seed_clubs():
         })
     print(f"Seeded {len(CLUB_SEED_DATA)} clubs.")
 
+
 app = FastAPI(
     title=settings.app_name,
     description="Intelligent News Aggregator",
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Attach limiter to app state so slowapi middleware can find it
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,6 +100,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(health.router)
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(articles.router, prefix="/article", tags=["Articles"])
 app.include_router(comments.router, prefix="/comments", tags=["Comments"])
@@ -88,35 +113,3 @@ app.include_router(clubs.router, prefix="/clubs", tags=["Clubs"])
 @app.get("/", tags=["Health"])
 async def root():
     return {"status": "healthy", "app": settings.app_name}
-
-@app.get("/health", tags=["Health"])
-async def health_check():
-    from fastapi import HTTPException
-    status_db = "disconnected"
-    status_cache = "disconnected"
-    is_healthy = True
-
-    try:
-        from app.db import get_database, get_redis
-        db = get_database()
-        await db.command("ping")
-        status_db = "connected"
-    except Exception as e:
-        is_healthy = False
-        print(f"MongoDB health check failed: {e}")
-
-    try:
-        redis_client = get_redis()
-        if redis_client:
-            await redis_client.ping()
-            status_cache = "connected"
-        else:
-            is_healthy = False
-    except Exception as e:
-        is_healthy = False
-        print(f"Redis health check failed: {e}")
-
-    if not is_healthy:
-        raise HTTPException(status_code=503, detail={"status": "unhealthy", "database": status_db, "cache": status_cache, "app": settings.app_name})
-
-    return {"status": "healthy", "database": status_db, "cache": status_cache, "app": settings.app_name}
