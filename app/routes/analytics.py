@@ -35,6 +35,7 @@ async def get_trending_articles(limit: int) -> List[TrendingArticle]:
         {"$project": {
             "article_id": {"$toString": "$_id"},
             "title": 1,
+            "category": {"$ifNull": ["$category", "General"]},
             "views": 1,
             "upvotes": 1,
             "comments_count": 1,
@@ -44,11 +45,42 @@ async def get_trending_articles(limit: int) -> List[TrendingArticle]:
     
     cursor = collection.aggregate(pipeline)
     results = await cursor.to_list(length=limit)
+
+    # Fallback: if no articles found from last 24h, return top active articles overall
+    if len(results) < limit:
+        existing_ids = [r["_id"] for r in results]
+        fallback_pipeline = [
+            {"$match": {"_id": {"$nin": existing_ids}}},
+            {"$addFields": {
+                "trending_score": {
+                    "$add": [
+                        {"$ifNull": ["$views", 0]},
+                        {"$multiply": [{"$ifNull": ["$upvotes", 0]}, 3]},
+                        {"$multiply": [{"$ifNull": ["$comments_count", 0]}, 5]}
+                    ]
+                }
+            }},
+            {"$sort": {"trending_score": -1, "created_at": -1}},
+            {"$limit": limit - len(results)},
+            {"$project": {
+                "article_id": {"$toString": "$_id"},
+                "title": 1,
+                "category": {"$ifNull": ["$category", "General"]},
+                "views": 1,
+                "upvotes": 1,
+                "comments_count": 1,
+                "trending_score": 1
+            }}
+        ]
+        fallback_cursor = collection.aggregate(fallback_pipeline)
+        fallback_results = await fallback_cursor.to_list(length=limit - len(results))
+        results.extend(fallback_results)
     
     trending = [
         TrendingArticle(
             article_id=r["article_id"],
             title=r["title"],
+            category=r.get("category", "General"),
             views=r.get("views", 0),
             upvotes=r.get("upvotes", 0),
             comments_count=r.get("comments_count", 0),
@@ -57,7 +89,7 @@ async def get_trending_articles(limit: int) -> List[TrendingArticle]:
         for r in results
     ]
     
-    await cache_set(cache_key, json.dumps([t.model_dump() for t in trending]), 300)
+    await cache_set(cache_key, json.dumps([t.model_dump() for t in trending]), 120)
     
     return trending
 
@@ -175,3 +207,64 @@ async def reading_insights(current_user: UserResponse = Depends(get_current_user
 @router.get("/dashboard", response_model=DashboardStats)
 async def dashboard(current_user: UserResponse = Depends(get_current_user_required)):
     return await _get_dashboard_stats(current_user.id, current_user.daily_practice_target)
+
+
+@router.get("/reading-activity", response_model=List[DailyCount])
+async def get_user_reading_activity(current_user: UserResponse = Depends(get_current_user_required)):
+    collection = get_user_interactions_collection()
+    one_year_ago = datetime.utcnow() - timedelta(days=365)
+    pipeline = [
+        {"$match": {
+            "user_id": current_user.id,
+            "interaction_type": {"$in": ["view", "read"]},
+            "timestamp": {"$gte": one_year_ago}
+        }},
+        {"$group": {
+            "_id": {
+                "$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}
+            },
+            "count": {"$sum": 1}
+        }},
+        {"$sort": {"_id": 1}}
+    ]
+    cursor = collection.aggregate(pipeline)
+    results = await cursor.to_list(length=366)
+    return [DailyCount(date=r["_id"], count=r["count"]) for r in results]
+
+
+@router.get("/reading-history")
+async def get_user_reading_history(current_user: UserResponse = Depends(get_current_user_required)):
+    from app.db import get_users_collection, get_articles_collection
+    from bson import ObjectId
+
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id}, {"reading_history": 1})
+    if not user or not user.get("reading_history"):
+        return {"history": []}
+
+    article_ids = user.get("reading_history", [])[:50]
+    oids = []
+    for aid in article_ids:
+        try:
+            oids.append(ObjectId(aid))
+        except Exception:
+            pass
+
+    if not oids:
+        return {"history": []}
+
+    articles_coll = get_articles_collection()
+    cursor = articles_coll.find({"_id": {"$in": oids}}, {"title": 1, "category": 1, "created_at": 1})
+    articles_map = {}
+    async for doc in cursor:
+        created = doc.get("created_at")
+        read_str = created.isoformat() if hasattr(created, "isoformat") else str(created or "")
+        articles_map[str(doc["_id"])] = {
+            "id": str(doc["_id"]),
+            "title": doc.get("title", ""),
+            "category": doc.get("category", "General"),
+            "read_at": read_str,
+        }
+
+    ordered_history = [articles_map[aid] for aid in article_ids if aid in articles_map]
+    return {"history": ordered_history}

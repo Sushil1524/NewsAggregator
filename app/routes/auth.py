@@ -32,6 +32,11 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 @router.post("/register", response_model=TokenResponse)
 @limiter.limit("5/minute")
 async def register(request: Request, user_data: UserCreate):
@@ -139,6 +144,33 @@ async def update_me(update_data: UserUpdate, current_user: UserResponse = Depend
     )
 
 
+@router.post("/change-password")
+async def change_password(
+    req: PasswordChangeRequest,
+    current_user: UserResponse = Depends(get_current_user_required)
+):
+    if len(req.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 6 characters long"
+        )
+
+    users_coll = get_users_collection()
+    user = await users_coll.find_one({"id": current_user.id})
+    if not user or not verify_password(req.current_password, user.get("hashed_password", "")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+
+    new_hashed = hash_password(req.new_password)
+    await users_coll.update_one(
+        {"id": current_user.id},
+        {"$set": {"hashed_password": new_hashed, "updated_at": datetime.utcnow().isoformat()}}
+    )
+    return {"message": "Password changed successfully"}
+
+
 @router.post("/logout")
 async def logout(
     request: Request,
@@ -215,6 +247,41 @@ async def get_my_stats(current_user: UserResponse = Depends(get_current_user_req
         )
         g["badges"] = all_badges
 
+    # Count total upvotes by user
+    from app.db import get_votes_collection, get_user_interactions_collection, get_articles_collection
+    from bson import ObjectId
+
+    votes_coll = get_votes_collection()
+    total_upvotes = await votes_coll.count_documents({"user_id": current_user.id, "vote_type": "up"})
+
+    # Topic breakdown from reading history / interactions
+    interactions_coll = get_user_interactions_collection()
+    cursor = interactions_coll.find(
+        {"user_id": current_user.id, "interaction_type": {"$in": ["view", "read"]}},
+        {"article_id": 1}
+    )
+    interactions = await cursor.to_list(length=1000)
+    article_ids = list(set(i.get("article_id") for i in interactions if i.get("article_id")))
+
+    topic_breakdown = {}
+    if article_ids:
+        oids = []
+        for aid in article_ids:
+            try:
+                oids.append(ObjectId(aid))
+            except Exception:
+                pass
+        if oids:
+            articles_coll = get_articles_collection()
+            cursor = articles_coll.find({"_id": {"$in": oids}}, {"category": 1})
+            async for doc in cursor:
+                cat = doc.get("category") or "General"
+                topic_breakdown[cat] = topic_breakdown.get(cat, 0) + 1
+
+    # Selected categories from user preferences
+    raw_prefs = user.get("news_preferences", {})
+    selected_categories = [k for k, v in raw_prefs.items() if v]
+
     return {
         "points": g.get("points", 0),
         "streak": streak,
@@ -223,4 +290,7 @@ async def get_my_stats(current_user: UserResponse = Depends(get_current_user_req
         "total_reading_time_minutes": g.get("total_reading_time_minutes", 0),
         "badges": g.get("badges", []),
         "newly_unlocked": new_badges,
+        "total_upvotes": total_upvotes,
+        "selected_categories": selected_categories,
+        "topic_breakdown": topic_breakdown,
     }
