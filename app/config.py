@@ -24,11 +24,14 @@ class Settings:
 
         self.huggingface_api_key: str = os.getenv("HUGGINGFACE_API_KEY", "")
         self.huggingface_model: str = os.getenv("HUGGINGFACE_MODEL", "facebook/bart-large-cnn")
-        self.huggingface_sentiment_model: str = os.getenv("HUGGINGFACE_SENTIMENT_MODEL", "distilbert-base-uncased-finetuned-sst-2-english")
+        self.huggingface_sentiment_model: str = os.getenv("HUGGINGFACE_SENTIMENT_MODEL", "cardiffnlp/twitter-roberta-base-sentiment-latest")
         self.huggingface_classification_model: str = os.getenv("HUGGINGFACE_CLASSIFICATION_MODEL", "facebook/bart-large-mnli")
 
         self.rss_fetch_interval_minutes: int = int(os.getenv("RSS_FETCH_INTERVAL_MINUTES", "15"))
         self.max_articles_per_fetch: int = int(os.getenv("MAX_ARTICLES_PER_FETCH", "50"))
+        self.pipeline_batch_size: int = int(os.getenv("PIPELINE_BATCH_SIZE", "50"))
+        self.pipeline_batches: int = int(os.getenv("PIPELINE_BATCHES", "2"))
+        self.use_local_engine: bool = os.getenv("USE_LOCAL_ENGINE", "true").strip().lower() == "true"
 
         # RSS feeds organised by location/topic — each entry maps to a (country_code, url) pair
         # Format: { "location_label": { "country_code": "XX", "urls": [...] } }
@@ -39,9 +42,9 @@ class Settings:
                     "https://www.theguardian.com/world/rss",
                     "https://feeds.bbci.co.uk/news/world/rss.xml",
                     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-                    "http://rss.cnn.com/rss/cnn_topstories.rss",
+                    # "http://rss.cnn.com/rss/cnn_topstories.rss",
                     "https://www.france24.com/en/rss",
-                    "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+                    # "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
                 ],
             },
             "India": {
@@ -98,7 +101,7 @@ class Settings:
                 "country_code": "AU",
                 "urls": [
                     "https://www.abc.net.au/news/feed/51120/rss.xml",
-                    "https://www.nzherald.co.nz/arc/outbound-feeds/rss/?outputType=xml",
+                    "https://www.smh.com.au/rss/feed.xml",
                 ],
             },
             "Canada": {
@@ -123,7 +126,7 @@ class Settings:
                 "country_code": None,
                 "urls": [
                     "https://www.sciencedaily.com/rss/top/science.xml",
-                    "https://feeds.newscientist.com/full-rss-feed.xml",
+                    "https://phys.org/rss-feed/",
                 ],
             },
             "Sports": {
@@ -137,7 +140,8 @@ class Settings:
                 "country_code": None,
                 "urls": [
                     "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-                    "https://rss.app/feeds/KKDXBm38OuWGJXH5.xml",  # Bloomberg via rss.app
+                    "https://www.bloomberg.com/feeds/news.rss",
+                    #"https://rss.app/feeds/KKDXBm38OuWGJXH5.xml",  
                 ],
             },
             "Environment": {

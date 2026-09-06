@@ -1,44 +1,40 @@
 import asyncio
 import traceback
 from datetime import datetime, timedelta
-from app.db import get_articles_collection
+from app.config import get_settings
+from app.db import get_articles_collection, get_raw_articles_collection
 from app.services.rss_fetcher import fetch_and_store_feeds, get_unprocessed_articles, mark_article_processed
 from app.services.summarizer import summarize_text, analyze_sentiment, classify_text
+from app.services.local_nlp import (
+    local_summarize,
+    local_sentiment,
+    local_classify,
+    normalize_publisher
+)
 from app.utils.helpers import estimate_reading_time, extract_tags_from_text, extract_locations_from_text, CATEGORIES
 
-# Valid category names (must match ArticleCategory enum)
 VALID_CATEGORIES = set(CATEGORIES.keys())
 
-# How many articles to process concurrently
 PIPELINE_CONCURRENCY = 5
 
+def _safe_print(msg: str):
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"))
 
 def _normalize_category(category: str) -> str:
-    """Ensure category is title-cased and maps to a valid enum value."""
     if not category:
         return "General"
     normalized = category.strip().title()
     if normalized in VALID_CATEGORIES:
         return normalized
-    # Case-insensitive fallback
     for valid in VALID_CATEGORIES:
         if valid.lower() == normalized.lower():
             return valid
     return "General"
 
-
 async def process_article(raw: dict) -> dict:
-    """
-    Run the full enrichment pipeline on a raw article dict.
-
-    Steps:
-    1. Build clean content string
-    2. Summarise (HF BART → extractive → truncated)
-    3. Classify category (feed shortcut → HF zero-shot → keyword)
-    4. Analyse sentiment (HF → keyword)
-    5. Extract tags, locations, reading time
-    6. Return fully-enriched article dict
-    """
     title = raw.get("title", "").strip()
     content = (raw.get("content", "") or raw.get("summary", "")).strip()
     rss_summary = raw.get("summary", "").strip()
@@ -56,7 +52,6 @@ async def process_article(raw: dict) -> dict:
     clean_content = _clean(content)
     clean_rss_summary = _clean(rss_summary)
 
-    # --- Choose the best text to send to the summariser ---
     if clean_content and len(clean_content.split()) >= 30:
         source_text = clean_content[:5000]
     elif clean_rss_summary and len(clean_rss_summary.split()) >= 8:
@@ -64,44 +59,33 @@ async def process_article(raw: dict) -> dict:
     else:
         source_text = (clean_content or clean_rss_summary)[:1000]
 
-    summary, summary_source = await summarize_text(title, source_text)
+    cfg = get_settings()
+    source_name = normalize_publisher(raw.get("source"))
 
-    # Final guard: ensure summary is meaningful
-    if not summary or len(summary.strip()) < 20 or re.search(r"(?i)^click\s+to\s+read", summary.strip()):
-        src = raw.get("source") or "the publisher"
-        summary = (
-            f"This report covers key developments regarding {title}. "
-            f"Read the full coverage on {src}."
-        )
+    if cfg.use_local_engine:
+        summary, summary_source = local_summarize(title, source_text)
+        sentiment = local_sentiment(title, summary)
+        category = _normalize_category(local_classify(title, summary, feed_category=feed_category))
+    else:
+        summary, summary_source = await summarize_text(title, source_text)
+        sentiment = await analyze_sentiment(title, summary)
+        category_labels = list(CATEGORIES.keys())
+        category_raw = await classify_text(title, summary, category_labels, feed_category=feed_category)
+        category = _normalize_category(category_raw)
 
-    # --- Sentiment (title + summary for better signal) ---
-    sentiment = await analyze_sentiment(title, summary)
-
-    # --- Category classification ---
-    category_labels = list(CATEGORIES.keys())
-    # Pass feed_category so topic-feed articles skip the expensive HF call
-    classify_input = f"{title} {summary}"
-    category_raw = await classify_text(title, summary, category_labels, feed_category=feed_category)
-    category = _normalize_category(category_raw)
-
-    # --- Tags ---
     tags = raw.get("tags") or []
     if not tags or len(tags) < 2:
         tags = extract_tags_from_text(f"{title} {summary}")
 
-    # --- Locations ---
     location_text = f"{title} {summary} {clean_content[:500]}"
     locations = extract_locations_from_text(location_text)
     rss_location = raw.get("rss_location")
     if rss_location and rss_location not in locations:
         locations.insert(0, rss_location)
 
-    # --- Reading time (use full content) ---
     reading_time = estimate_reading_time(content)
-
     country_code = raw.get("country_code")
 
-    # --- Breaking news detection ---
     is_breaking = False
     title_lower = title.lower()
     source_lower = raw.get("source", "").lower()
@@ -125,7 +109,7 @@ async def process_article(raw: dict) -> dict:
         "tags": tags[:6],
         "locations": locations,
         "country_code": country_code,
-        "source": raw.get("source"),
+        "source": source_name,
         "published_at": raw.get("published_at"),
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
@@ -138,9 +122,7 @@ async def process_article(raw: dict) -> dict:
         "difficulty_level": "medium",
     }
 
-
 async def _process_and_save(raw: dict, collection, semaphore: asyncio.Semaphore) -> bool:
-    """Process a single article under a concurrency semaphore and upsert it."""
     async with semaphore:
         try:
             one_day_ago = datetime.utcnow() - timedelta(days=1)
@@ -176,20 +158,22 @@ async def _process_and_save(raw: dict, collection, semaphore: asyncio.Semaphore)
             traceback.print_exc()
             return False
 
-
-async def run_pipeline(max_articles: int = 50):
+async def run_pipeline(max_articles: int | None = None, batches: int | None = None):
     import time
     from app.config import get_settings
     import os
-    if get_settings().dev_mode or os.getenv("DEV_MODE", "false").strip().lower() == "true":
+    cfg = get_settings()
+    if cfg.dev_mode or os.getenv("DEV_MODE", "false").strip().lower() == "true":
         print("[pipeline] DEV_MODE active — pipeline bypassed.")
         return {"processed": 0, "total_unprocessed": 0}
 
+    batch_size = max_articles if max_articles is not None else cfg.pipeline_batch_size
+    batch_count = batches if batches is not None else cfg.pipeline_batches
+
     started_at = datetime.utcnow()
     run_start = time.perf_counter()
-    print("[pipeline] Starting news pipeline...")
+    print(f"[pipeline] Starting news pipeline (batch_size={batch_size}, batches={batch_count})...")
 
-    # Demote breaking news older than 24 h
     articles_coll = get_articles_collection()
     yesterday = datetime.utcnow() - timedelta(hours=24)
     await articles_coll.update_many(
@@ -197,36 +181,39 @@ async def run_pipeline(max_articles: int = 50):
         {"$set": {"is_breaking": False}},
     )
 
-    # Fetch & store new raw articles — capture counts
     from app.services.rss_fetcher import _feed_failures, FEED_FAILURE_THRESHOLD
     saved_count = await fetch_and_store_feeds()
-
-    # Count how many raw articles were fetched in total this cycle
-    # (saved_count = new ones; we can't know total fetched from here without
-    #  modifying fetch_and_store_feeds — use saved_count as a lower bound)
     articles_fetched = saved_count
 
-    unprocessed = await get_unprocessed_articles(limit=max_articles)
-    print(f"[pipeline] Found {len(unprocessed)} unprocessed articles.")
+    raw_coll = get_raw_articles_collection()
+    initial_unprocessed = await raw_coll.count_documents({"is_processed": False})
+    print(f"[pipeline] Queue status: {initial_unprocessed} total unprocessed raw articles in DB.")
 
     semaphore = asyncio.Semaphore(PIPELINE_CONCURRENCY)
-
-    # Track per-article outcomes for the run record
     summary_sources: dict[str, int] = {}
     category_counts: dict[str, int] = {}
-    processed_results: list[tuple[bool, dict]] = []  # (success, processed_data)
+    total_processed = 0
 
     async def _process_and_track(raw: dict) -> bool:
         async with semaphore:
             try:
                 one_day_ago = datetime.utcnow() - timedelta(days=1)
+                title = raw.get("title", "")
+                text = (raw.get("content") or raw.get("summary") or "")
+
+                from app.services.rss_fetcher import _is_newsletter_or_digest, _is_promo_or_deal_article
+                if _is_newsletter_or_digest(title, text) or _is_promo_or_deal_article(title, text):
+                    _safe_print(f"[pipeline] Dropping newsletter/promo article: {title[:60]}")
+                    await mark_article_processed(raw["url"])
+                    return False
+
                 is_duplicate = await articles_coll.find_one({
-                    "title": raw.get("title", ""),
+                    "title": title,
                     "created_at": {"$gte": one_day_ago}
                 })
 
                 if is_duplicate:
-                    print(f"[pipeline] Duplicate, skipping: {raw.get('title', '')[:60]}")
+                    print(f"[pipeline] Duplicate, skipping: {title[:60]}")
                     await mark_article_processed(raw["url"])
                     return False
 
@@ -239,36 +226,68 @@ async def run_pipeline(max_articles: int = 50):
                 )
                 await mark_article_processed(raw["url"])
 
-                # Record outcomes for observability
                 src = processed_data.get("summary_source", "unknown")
                 cat = processed_data.get("category", "General")
                 summary_sources[src] = summary_sources.get(src, 0) + 1
                 category_counts[cat] = category_counts.get(cat, 0) + 1
 
-                print(
-                    f"[pipeline] ✓ {processed_data['title'][:60]} "
-                    f"→ {cat} [{processed_data['sentiment']}] [{src}]"
+                _safe_print(
+                    f"[pipeline] [OK] {processed_data['title'][:60]} "
+                    f"-> {cat} [{processed_data['sentiment']}] [{src}]"
                 )
                 return True
 
             except Exception as e:
-                print(f"[pipeline] Error processing '{raw.get('title', '')}': {e}")
+                _safe_print(f"[pipeline] Error processing article: {e}")
                 traceback.print_exc()
                 return False
 
-    results = await asyncio.gather(*[_process_and_track(raw) for raw in unprocessed])
-    processed_count = sum(1 for r in results if r)
+    if cfg.use_local_engine:
+        # High-performance local engine (<2ms/article): process entire raw queue until empty
+        b = 0
+        while True:
+            unprocessed = await get_unprocessed_articles(limit=batch_size)
+            if not unprocessed:
+                print(f"[pipeline] All raw articles processed. Queue is empty!")
+                break
+            b += 1
+            print(f"[pipeline] Processing batch {b} ({len(unprocessed)} articles, source-diverse)...")
+            results = await asyncio.gather(*[_process_and_track(raw) for raw in unprocessed])
+            batch_processed = sum(1 for r in results if r)
+            total_processed += batch_processed
+            if batch_processed > 0:
+                from app.db import clear_cache_pattern
+                await clear_cache_pattern("article_list:*")
+            print(f"[pipeline] Batch {b} finished: {batch_processed} articles enriched.")
+    else:
+        for b in range(batch_count):
+            unprocessed = await get_unprocessed_articles(limit=batch_size)
+            if not unprocessed:
+                print(f"[pipeline] No more unprocessed articles available.")
+                break
+
+            print(f"[pipeline] Processing batch {b + 1}/{batch_count} ({len(unprocessed)} articles, source-diverse)...")
+            results = await asyncio.gather(*[_process_and_track(raw) for raw in unprocessed])
+            batch_processed = sum(1 for r in results if r)
+            total_processed += batch_processed
+            if batch_processed > 0:
+                from app.db import clear_cache_pattern
+                await clear_cache_pattern("article_list:*")
+            print(f"[pipeline] Batch {b + 1}/{batch_count} finished: {batch_processed} articles enriched.")
+
+    remaining_unprocessed = await raw_coll.count_documents({"is_processed": False})
+    print(f"[pipeline] Queue status after run: {remaining_unprocessed} unprocessed articles remaining.")
+
+    processed_count = total_processed
 
     finished_at = datetime.utcnow()
     duration_seconds = round(time.perf_counter() - run_start, 2)
 
-    # Identify feeds that hit the failure threshold this cycle
     failed_feeds = [
         url for url, count in _feed_failures.items()
         if count >= FEED_FAILURE_THRESHOLD
     ]
 
-    # ── Persist run record ────────────────────────────────────────────────────
     try:
         from app.db import get_pipeline_runs_collection
         runs_coll = get_pipeline_runs_collection()
@@ -290,7 +309,6 @@ async def run_pipeline(max_articles: int = 50):
 
     print(f"[pipeline] Finished. Processed {processed_count}/{len(unprocessed)} articles.")
     return {"processed": processed_count, "total_unprocessed": len(unprocessed)}
-
 
 
 async def refresh_breaking_news():

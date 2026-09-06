@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+import re
 import feedparser
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -124,12 +125,77 @@ def _clean_boilerplate(text: str) -> str:
     return cleaned
 
 
+_NEWSLETTER_PATTERNS = [
+    # E.g. "Monday briefing:", "First Edition:", "Daily Briefing:", "Morning Edition:"
+    r"(?i)^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\s*(?:morning|evening|daily|weekly)?\s*(?:briefing|newsletter|roundup|edition|digest)\b",
+    r"(?i)\b(?:in today's newsletter|first edition:|what we're reading:|five things to know|today's top stories|the morning:)\b",
+    r"(?i)^the\s+(?:morning|evening|daily)\s*:",
+]
+
+
+def _is_newsletter_or_digest(title: str, text: str = "") -> bool:
+    """Detect multi-story newsletter digests and roundups so they can be dropped."""
+    for pat in _NEWSLETTER_PATTERNS:
+        if re.search(pat, title):
+            return True
+    lead = text[:180].lower() if text else ""
+    newsletter_markers = [
+        "in today's newsletter",
+        "good morning. over the weekend",
+        "good morning. in today's",
+        "your daily briefing",
+        "here's what you need to know today",
+        "welcome to first edition",
+        "five things you need to know"
+    ]
+    return any(marker in lead for marker in newsletter_markers)
+
+
+_PROMO_PATTERNS = [
+    r"(?i)\bpromo code",
+    r"(?i)\bpromo codes",
+    r"(?i)\bcoupons?\b",
+    r"(?i)\bdiscounts?\b",
+    r"(?i)\b\d+%\s*off\b",
+    r"(?i)\bbest deals\b",
+    r"(?i)\bdeals from\b",
+    r"(?i)\blabor day sale\b",
+    r"(?i)\bblack friday\b",
+    r"(?i)\bcyber monday\b",
+    r"(?i)\bbest (?:folding phones|laptops|smartphones|headphones|sleep tracker|cheap|picks|deals|tech)\b",
+    r"(?i)\breview \(\d{4}\)\b",
+    r"(?i)\bshopping guide\b",
+    r"(?i)\bbuyer'?s guide\b",
+    r"(?i)\bsave \$\d+\b",
+    # Betting, gambling, casino, free bets
+    r"(?i)\bbetting\b",
+    r"(?i)\bfree bets?\b",
+    r"(?i)\bbet \S\d+\b",
+    r"(?i)\bwelcome bonus(?:es)?\b",
+    r"(?i)\bcasino\b",
+    r"(?i)\bgambling\b",
+    r"(?i)\bbookmakers?\b",
+    r"(?i)\bbetting offers?\b",
+    r"(?i)\bdeposit bonus\b",
+    r"(?i)\bodds\b",
+]
+
+def _is_promo_or_deal_article(title: str, text: str = "") -> bool:
+    if not title:
+        return False
+    combined = f"{title} {text[:300]}"
+    return any(re.search(pat, combined) for pat in _PROMO_PATTERNS)
+
+
 def _parse_entry(entry, source: str, country_code: str | None) -> dict | None:
     url = entry.get("link", "")
     if not url:
         return None
 
     title = entry.get("title", "Untitled").strip()
+    if _is_newsletter_or_digest(title) or _is_promo_or_deal_article(title):
+        return None
+
     published = _get_date(entry)
     image_url = _get_image(entry)
 
@@ -328,14 +394,13 @@ async def save_raw_articles(articles: list[dict]) -> int:
         return 0
 
     collection = get_raw_articles_collection()
-    saved = 0
-
-    for article in articles:
-        existing = await collection.find_one({"url": article["url"]})
-        if not existing:
-            await collection.insert_one(article)
-            saved += 1
-
+    from pymongo import UpdateOne
+    operations = [
+        UpdateOne({"url": a["url"]}, {"$setOnInsert": a}, upsert=True)
+        for a in articles
+    ]
+    res = await collection.bulk_write(operations, ordered=False)
+    saved = res.upserted_count
     print(f"Saved {saved} new articles")
     return saved
 
@@ -347,8 +412,32 @@ async def fetch_and_store_feeds() -> int:
 
 async def get_unprocessed_articles(limit: int = 50) -> list[dict]:
     collection = get_raw_articles_collection()
-    cursor = collection.find({"is_processed": False}).limit(limit)
-    return await cursor.to_list(length=limit)
+    # Single efficient query fetching a candidate pool
+    pool_size = max(limit * 3, 150)
+    cursor = collection.find({"is_processed": False}).limit(pool_size)
+    candidates = await cursor.to_list(length=pool_size)
+
+    if not candidates or len(candidates) <= limit:
+        return candidates
+
+    # Group candidates by source in Python memory (zero extra DB calls)
+    from collections import defaultdict
+    by_source: dict[str, list[dict]] = defaultdict(list)
+    for doc in candidates:
+        source = doc.get("source") or "Unknown"
+        by_source[source].append(doc)
+
+    # Interleave / round-robin selection across sources so no single provider dominates
+    diverse_articles: list[dict] = []
+    sources = list(by_source.keys())
+    idx = 0
+    while len(diverse_articles) < limit and any(by_source.values()):
+        src = sources[idx % len(sources)]
+        if by_source[src]:
+            diverse_articles.append(by_source[src].pop(0))
+        idx += 1
+
+    return diverse_articles
 
 
 async def mark_article_processed(url: str):
