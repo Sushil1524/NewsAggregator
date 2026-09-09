@@ -5,6 +5,7 @@ import platform
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, status
 from app.config import get_settings
+from app.scheduler import get_scheduler_status
 from app.db import get_database, get_redis, get_articles_collection, get_users_collection, get_clubs_collection
 
 router = APIRouter()
@@ -46,6 +47,8 @@ async def health_check():
 
     uptime_seconds = int(time.time() - START_TIME)
 
+    scheduler_info = get_scheduler_status()
+
     health_payload = {
         "status": "healthy" if is_healthy else "unhealthy",
         "app": settings.app_name,
@@ -60,6 +63,7 @@ async def health_check():
             "cache": {
                 "status": cache_status,
             },
+            "scheduler": scheduler_info,
         },
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }

@@ -2,8 +2,22 @@ import re
 from datetime import datetime
 from typing import Optional
 
+import html
+
 def clean_html(text: str) -> str:
-    return re.sub(r"<.*?>", "", text)
+    if not text:
+        return ""
+    # 1. Unescape HTML entities (&amp;, &nbsp;, &#39;, &quot;)
+    cleaned = html.unescape(text)
+    # 2. Insert spacing and paragraph separation for block tags so words aren't fused together
+    cleaned = re.sub(r"<\s*/?(?:p|div|br|hr|h[1-6]|li|tr|blockquote)[^>]*>", "\n\n", cleaned, flags=re.IGNORECASE)
+    # 3. Strip remaining HTML tags
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    # 4. Remove common trailing RSS clickbait ("Continue reading...", "Read more...")
+    cleaned = re.sub(r"\b(?:Continue reading|Read more|Click here to read more|Read full story)\b[\s.…—–-]*", "", cleaned, flags=re.IGNORECASE)
+    # 5. Normalize whitespace while keeping clean paragraph breaks
+    paragraphs = [re.sub(r"\s+", " ", p).strip() for p in cleaned.split("\n\n")]
+    return "\n\n".join(p for p in paragraphs if p)
 
 STOPWORDS = {
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",

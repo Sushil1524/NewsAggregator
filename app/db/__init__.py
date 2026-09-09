@@ -158,6 +158,17 @@ async def cache_delete(key: str):
         await client.delete(key)
 
 
+async def clear_cache_pattern(pattern: str = "article_list:*"):
+    client = get_redis()
+    if client:
+        try:
+            keys = await client.keys(pattern)
+            if keys:
+                await client.delete(*keys)
+        except Exception:
+            pass
+
+
 # ─── JWT Blacklist (token revocation) ─────────────────────────────────────────
 
 async def blacklist_token(jti: str, ttl_seconds: int):

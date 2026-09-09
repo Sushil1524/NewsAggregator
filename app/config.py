@@ -32,6 +32,7 @@ class Settings:
         self.pipeline_batch_size: int = int(os.getenv("PIPELINE_BATCH_SIZE", "50"))
         self.pipeline_batches: int = int(os.getenv("PIPELINE_BATCHES", "2"))
         self.use_local_engine: bool = os.getenv("USE_LOCAL_ENGINE", "true").strip().lower() == "true"
+        self.pipeline_startup_delay_seconds: int = int(os.getenv("PIPELINE_STARTUP_DELAY_SECONDS", "60"))
 
         # RSS feeds organised by location/topic — each entry maps to a (country_code, url) pair
         # Format: { "location_label": { "country_code": "XX", "urls": [...] } }
