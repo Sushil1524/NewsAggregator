@@ -14,7 +14,7 @@ class Settings:
         self.access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
         self.refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
-        frontend_urls_raw = os.getenv("FRONTEND_URLS", "http://localhost:3000")
+        frontend_urls_raw = os.getenv("FRONTEND_URLS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001")
         self.frontend_urls: list[str] = [url.strip() for url in frontend_urls_raw.split(",") if url.strip()]
 
         self.mongodb_url: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")

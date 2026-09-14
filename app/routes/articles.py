@@ -157,6 +157,7 @@ async def _track_user_interaction(
     })
 
 
+@router.get("", response_model=List[ArticleListItem])
 @router.get("/", response_model=List[ArticleListItem])
 async def list_articles(
     cursor: Optional[datetime] = Query(None),
