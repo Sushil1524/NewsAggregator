@@ -1,9 +1,9 @@
+from typing import Any
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-import redis.asyncio as redis
+from redis.asyncio import from_url as redis_from_url
 from app.config import get_settings
 
-settings = get_settings()
-
+settings = get_settings()   
 _mongo_client: AsyncIOMotorClient | None = None
 _database: AsyncIOMotorDatabase | None = None
 
@@ -65,8 +65,10 @@ async def connect_mongodb():
     await _database.club_posts.create_index([("club_slug", 1), ("created_at", -1)])
     await _database.club_comments.create_index("post_id")
 
-    print(f"Connected to MongoDB: {settings.mongodb_database}")
+    # ── feed_metadata (Conditional HTTP 304 ETag / Last-Modified caching) ─────
+    await _database.feed_metadata.create_index("feed_url", unique=True)
 
+    print(f"Connected to MongoDB: {settings.mongodb_database}")
 
 async def close_mongodb():
     global _mongo_client
@@ -80,7 +82,6 @@ def get_database() -> AsyncIOMotorDatabase:
         raise RuntimeError("MongoDB not connected. Call connect_mongodb() first.")
     return _database
 
-
 def get_articles_collection():
     return get_database().articles
 
@@ -89,6 +90,9 @@ def get_comments_collection():
 
 def get_raw_articles_collection():
     return get_database().raw_articles
+
+def get_feed_metadata_collection():
+    return get_database().feed_metadata
 
 def get_user_interactions_collection():
     return get_database().user_interactions
@@ -113,8 +117,7 @@ def get_pipeline_runs_collection():
 
 
 # ─── Redis ─────────────────────────────────────────────────────────────────────
-
-_redis_client: redis.Redis | None = None
+_redis_client: Any = None
 
 async def connect_redis():
     global _redis_client
@@ -123,10 +126,9 @@ async def connect_redis():
     if redis_url.startswith("rediss://") and "ssl_cert_reqs" not in redis_url:
         redis_url += "?ssl_cert_reqs=none" if "?" not in redis_url else "&ssl_cert_reqs=none"
 
-    _redis_client = redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+    _redis_client = redis_from_url(redis_url, encoding="utf-8", decode_responses=True)
     await _redis_client.ping()
     print("Connected to Redis")
-
 
 async def close_redis():
     global _redis_client
@@ -134,16 +136,13 @@ async def close_redis():
         await _redis_client.close()
         print("Redis connection closed")
 
-
-def get_redis() -> redis.Redis | None:
+def get_redis() -> Any:
     return _redis_client
-
 
 async def cache_set(key: str, value: str, expire_seconds: int = 300):
     client = get_redis()
     if client:
         await client.set(key, value, ex=expire_seconds)
-
 
 async def cache_get(key: str) -> str | None:
     client = get_redis()
@@ -151,12 +150,10 @@ async def cache_get(key: str) -> str | None:
         return await client.get(key)
     return None
 
-
 async def cache_delete(key: str):
     client = get_redis()
     if client:
         await client.delete(key)
-
 
 async def clear_cache_pattern(pattern: str = "article_list:*"):
     client = get_redis()
@@ -168,15 +165,8 @@ async def clear_cache_pattern(pattern: str = "article_list:*"):
         except Exception:
             pass
 
-
 # ─── JWT Blacklist (token revocation) ─────────────────────────────────────────
-
 async def blacklist_token(jti: str, ttl_seconds: int):
-    """
-    Add a JWT ID to the Redis blacklist.
-    ttl_seconds should match the token's remaining lifetime so the key
-    auto-expires when the token would have anyway.
-    """
     client = get_redis()
     if client and jti:
         await client.set(f"jti_blacklist:{jti}", "1", ex=max(ttl_seconds, 1))
@@ -191,13 +181,11 @@ async def is_token_blacklisted(jti: str) -> bool:
         return bool(await client.exists(f"jti_blacklist:{jti}"))
     return False
 
-
 async def increment_view_count(article_id: str) -> int:
     client = get_redis()
     if client:
         return await client.incr(f"views:{article_id}")
     return 0
-
 
 async def record_view_in_redis(article_id: str, ip: str, user_id: str | None = None) -> bool:
     client = get_redis()
@@ -221,7 +209,6 @@ async def record_view_in_redis(article_id: str, ip: str, user_id: str | None = N
     await client.hincrby("pending_views_h", article_id, 1)
 
     return True
-
 
 async def sync_views_to_mongodb():
     client = get_redis()
@@ -254,7 +241,6 @@ async def sync_views_to_mongodb():
 
 
 # ─── Vote Management (Persistent + Redis-cached) ───────────────────────────────
-
 async def get_user_vote_status(article_id: str, user_id: str) -> str | None:
     """Returns "up", "down", or None for the user's current vote on an article."""
     # Check Redis cache first (fast path)
@@ -279,12 +265,8 @@ async def get_user_vote_status(article_id: str, user_id: str) -> str | None:
 
     return None
 
-
 async def set_user_vote(article_id: str, user_id: str, vote_type: str | None):
-    """
-    Insert, update, or delete a user's vote record.
-    vote_type: "up" | "down" | None (None = remove the vote)
-    """
+
     votes_coll = get_votes_collection()
     client = get_redis()
 
@@ -303,12 +285,7 @@ async def set_user_vote(article_id: str, user_id: str, vote_type: str | None):
         if client:
             await client.set(f"user_vote:{article_id}:{user_id}", vote_type, ex=2592000)
 
-
 async def check_and_lock_vote(article_id: str, user_id: str, vote_type: str) -> bool:
-    """
-    Legacy compatibility: returns True if vote should be allowed (new vote).
-    Use get_user_vote_status + set_user_vote for toggle-aware logic in routes.
-    """
     existing = await get_user_vote_status(article_id, user_id)
     if existing == vote_type:
         return False  # Already voted this direction

@@ -4,8 +4,10 @@ import re
 import feedparser
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+from pymongo import UpdateOne
+from collections import defaultdict
 from app.config import get_settings
-from app.db import get_raw_articles_collection
+from app.db import get_raw_articles_collection, get_feed_metadata_collection
 from app.utils.helpers import clean_html, extract_tags_from_text
 
 settings = get_settings()
@@ -48,26 +50,42 @@ _BOILERPLATE_PATTERNS = [
     r"(?i)sponsored\s+content\b.*",
 ]
 
-
 async def fetch_feed(
     session: aiohttp.ClientSession,
     feed_url: str,
     feed_location: str,
     country_code: str | None,
     feed_category: str | None = None,
-) -> list[dict]:
-    """Fetch one RSS feed and return a list of raw article dicts."""
-    # Skip feeds that have been failing repeatedly
+    conditional_headers: dict | None = None,
+) -> tuple[list[dict], dict | None]:
+    """Fetch one RSS feed with conditional ETag/Last-Modified caching and return raw articles + metadata."""
     skip_until = _feed_skip_until.get(feed_url)
     if skip_until and datetime.utcnow() < skip_until:
-        return []
+        return [], None
+
+    req_headers = {}
+    if conditional_headers:
+        req_headers.update(conditional_headers)
 
     try:
         timeout = aiohttp.ClientTimeout(total=30)
-        async with session.get(feed_url, timeout=timeout) as resp:
+        async with session.get(feed_url, headers=req_headers, timeout=timeout) as resp:
+            if resp.status == 304:
+                _feed_failures[feed_url] = 0
+                _feed_skip_until.pop(feed_url, None)
+                meta = {
+                    "feed_url": feed_url,
+                    "last_status": 304,
+                    "last_fetched_at": datetime.utcnow(),
+                }
+                return [], meta
+
             if resp.status != 200:
                 _record_failure(feed_url)
-                return []
+                return [], None
+
+            etag = resp.headers.get("ETag")
+            last_mod = resp.headers.get("Last-Modified")
 
             text = await resp.text()
             feed = feedparser.parse(text)
@@ -93,13 +111,20 @@ async def fetch_feed(
             # Success — reset failure counter
             _feed_failures[feed_url] = 0
             _feed_skip_until.pop(feed_url, None)
-            return articles
+
+            meta = {
+                "feed_url": feed_url,
+                "etag": etag,
+                "last_modified": last_mod,
+                "last_status": 200,
+                "last_fetched_at": datetime.utcnow(),
+            }
+            return articles, meta
 
     except Exception as e:
         print(f"Error fetching {feed_url}: {e}")
         _record_failure(feed_url)
-        return []
-
+        return [], None
 
 def _record_failure(feed_url: str):
     _feed_failures[feed_url] = _feed_failures.get(feed_url, 0) + 1
@@ -110,7 +135,6 @@ def _record_failure(feed_url: str):
             f"Feed {feed_url} failed {FEED_FAILURE_THRESHOLD} times "
             f"— skipping for {FEED_SKIP_MINUTES} min"
         )
-
 
 def _clean_boilerplate(text: str) -> str:
     """Strip common RSS boilerplate patterns from article text."""
@@ -132,7 +156,6 @@ _NEWSLETTER_PATTERNS = [
     r"(?i)^the\s+(?:morning|evening|daily)\s*:",
 ]
 
-
 def _is_newsletter_or_digest(title: str, text: str = "") -> bool:
     """Detect multi-story newsletter digests and roundups so they can be dropped."""
     for pat in _NEWSLETTER_PATTERNS:
@@ -149,7 +172,6 @@ def _is_newsletter_or_digest(title: str, text: str = "") -> bool:
         "five things you need to know"
     ]
     return any(marker in lead for marker in newsletter_markers)
-
 
 _PROMO_PATTERNS = [
     r"(?i)\bpromo code",
@@ -185,7 +207,6 @@ def _is_promo_or_deal_article(title: str, text: str = "") -> bool:
         return False
     combined = f"{title} {text[:300]}"
     return any(re.search(pat, combined) for pat in _PROMO_PATTERNS)
-
 
 def _parse_entry(entry, source: str, country_code: str | None) -> dict | None:
     url = entry.get("link", "")
@@ -241,7 +262,6 @@ def _parse_entry(entry, source: str, country_code: str | None) -> dict | None:
         "created_at": datetime.utcnow(),
     }
 
-
 def _get_date(entry) -> datetime | None:
     for attr in ("published_parsed", "updated_parsed"):
         parsed = getattr(entry, attr, None)
@@ -251,7 +271,6 @@ def _get_date(entry) -> datetime | None:
             except Exception:
                 pass
     return None
-
 
 def _get_image(entry) -> str | None:
     # 1. Media thumbnail (BBC, Reuters, DW, The Hindu, NYT, etc.)
@@ -321,7 +340,6 @@ def _get_image(entry) -> str | None:
 
     return None
 
-
 async def _fetch_og_image(session: aiohttp.ClientSession, url: str) -> str | None:
     """
     Lightweight fallback: fetch the article HTML and extract og:image.
@@ -355,6 +373,15 @@ async def fetch_all_feeds() -> list[dict]:
             "Chrome/120.0.0.0 Safari/537.36"
         )
     }
+
+    metadata_map = {}
+    try:
+        meta_coll = get_feed_metadata_collection()
+        existing_meta = await meta_coll.find({}).to_list(length=200)
+        metadata_map = {doc["feed_url"]: doc for doc in existing_meta if "feed_url" in doc}
+    except Exception as e:
+        print(f"[fetcher] Could not load feed metadata: {e}")
+
     async with aiohttp.ClientSession(headers=headers) as session:
         tasks = []
         for location, feed_config in settings.rss_feeds.items():
@@ -362,13 +389,44 @@ async def fetch_all_feeds() -> list[dict]:
             # Determine feed_category for topic feeds
             feed_category = location if location in TOPIC_FEED_GROUPS else None
             for url in feed_config.get("urls", []):
-                tasks.append(fetch_feed(session, url, location, country_code, feed_category))
+                cond_headers = {}
+                meta = metadata_map.get(url)
+                if meta:
+                    if meta.get("etag"):
+                        cond_headers["If-None-Match"] = meta["etag"]
+                    if meta.get("last_modified"):
+                        cond_headers["If-Modified-Since"] = meta["last_modified"]
+                tasks.append(fetch_feed(session, url, location, country_code, feed_category, cond_headers))
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_articles: list[dict] = []
+        meta_updates: list[dict] = []
+        not_modified_count = 0
+
         for result in results:
-            if isinstance(result, list):
-                all_articles.extend(result)
+            if isinstance(result, tuple):
+                arts, meta = result
+                if arts:
+                    all_articles.extend(arts)
+                if meta:
+                    if meta.get("last_status") == 304:
+                        not_modified_count += 1
+                    meta_updates.append(meta)
+
+        # Bulk upsert updated feed metadata (ETag & Last-Modified)
+        if meta_updates:
+            try:
+                operations = [
+                    UpdateOne(
+                        {"feed_url": m["feed_url"]},
+                        {"$set": m},
+                        upsert=True,
+                    )
+                    for m in meta_updates
+                ]
+                await meta_coll.bulk_write(operations, ordered=False)
+            except Exception as e:
+                print(f"[fetcher] Could not save feed metadata: {e}")
 
         # og:image fallback pass — for articles still missing an image
         og_tasks = []
@@ -385,16 +443,17 @@ async def fetch_all_feeds() -> list[dict]:
                     all_articles[idx]["image_url"] = og_url
 
     total_feeds = sum(len(fc.get("urls", [])) for fc in settings.rss_feeds.values())
-    print(f"Fetched {len(all_articles)} articles from {total_feeds} feeds")
+    print(
+        f"[fetcher] Fetched {len(all_articles)} articles from {total_feeds} feeds "
+        f"({not_modified_count} unchanged feeds skipped via HTTP 304)"
+    )
     return all_articles
-
 
 async def save_raw_articles(articles: list[dict]) -> int:
     if not articles:
         return 0
 
     collection = get_raw_articles_collection()
-    from pymongo import UpdateOne
     operations = [
         UpdateOne({"url": a["url"]}, {"$setOnInsert": a}, upsert=True)
         for a in articles
@@ -404,11 +463,9 @@ async def save_raw_articles(articles: list[dict]) -> int:
     print(f"Saved {saved} new articles")
     return saved
 
-
 async def fetch_and_store_feeds() -> int:
     articles = await fetch_all_feeds()
     return await save_raw_articles(articles)
-
 
 async def get_unprocessed_articles(limit: int = 50) -> list[dict]:
     collection = get_raw_articles_collection()
@@ -420,8 +477,6 @@ async def get_unprocessed_articles(limit: int = 50) -> list[dict]:
     if not candidates or len(candidates) <= limit:
         return candidates
 
-    # Group candidates by source in Python memory (zero extra DB calls)
-    from collections import defaultdict
     by_source: dict[str, list[dict]] = defaultdict(list)
     for doc in candidates:
         source = doc.get("source") or "Unknown"
@@ -438,7 +493,6 @@ async def get_unprocessed_articles(limit: int = 50) -> list[dict]:
         idx += 1
 
     return diverse_articles
-
 
 async def mark_article_processed(url: str):
     collection = get_raw_articles_collection()
