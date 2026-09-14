@@ -3,9 +3,11 @@ import asyncio
 import re
 from typing import List, Tuple
 from app.config import get_settings
+from app.logging import get_logger
 from app.utils.helpers import categorize_article, strip_bullets
 
 settings = get_settings()
+logger = get_logger("app.summarizer")
 HF_API = "https://router.huggingface.co/hf-inference/models/"
 
 # Minimum HF classification confidence to trust the model result
@@ -92,12 +94,18 @@ async def summarize_text(title: str, text: str) -> Tuple[str, str]:
                 ) as resp:
                     if resp.status in (502, 503, 504):
                         wait = backoffs[attempt]
-                        print(f"[summarizer] HF gateway error {resp.status}, retrying in {wait}s (attempt {attempt+1})")
+                        logger.warning(
+                            f"HF gateway error {resp.status}, retrying in {wait}s (attempt {attempt+1})",
+                            extra={"status": resp.status, "wait_seconds": wait, "attempt": attempt + 1}
+                        )
                         await asyncio.sleep(wait)
                         continue
                     if resp.status != 200:
                         body = await resp.text()
-                        print(f"[summarizer] HF error {resp.status}: {body[:200]}")
+                        logger.warning(
+                            f"HF error {resp.status}: {body[:200]}",
+                            extra={"status": resp.status, "body": body[:200]}
+                        )
                         break
 
                     result = await resp.json()
@@ -120,7 +128,7 @@ async def summarize_text(title: str, text: str) -> Tuple[str, str]:
                 await asyncio.sleep(backoffs[attempt])
             continue
         except Exception as e:
-            print(f"[summarizer] Exception: {e}")
+            logger.error(f"HF summarizer exception: {e}", exc_info=True)
             break
 
     return (_extractive_summary(combined, max_sentences=3), "extractive")
@@ -342,7 +350,7 @@ async def classify_text(
                         continue
                     if resp.status != 200:
                         if resp.status != 410:
-                            print(f"[classify] API error: {resp.status}")
+                            logger.warning(f"Classification API error: {resp.status}", extra={"status": resp.status})
                         return categorize_article(title, text)
 
                     result = await resp.json()
@@ -358,9 +366,9 @@ async def classify_text(
 
                             if top_score < CLASSIFICATION_MIN_CONFIDENCE:
                                 fallback = categorize_article(title, text)
-                                print(
-                                    f"[classify] Low confidence {top_score:.2f} "
-                                    f"({short_label}) — keyword fallback: {fallback}"
+                                logger.debug(
+                                    f"Low confidence {top_score:.2f} ({short_label}) — keyword fallback: {fallback}",
+                                    extra={"score": top_score, "predicted": short_label, "fallback": fallback}
                                 )
                                 return fallback
 
@@ -379,7 +387,7 @@ async def classify_text(
                 await asyncio.sleep(2 ** attempt)
             continue
         except Exception as e:
-            print(f"[classify] Exception: {e}")
+            logger.error(f"Classification exception: {e}", exc_info=True)
             break
 
     return categorize_article(title, text)

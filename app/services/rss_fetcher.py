@@ -7,10 +7,12 @@ from bs4 import BeautifulSoup
 from pymongo import UpdateOne
 from collections import defaultdict
 from app.config import get_settings
+from app.logging import get_logger
 from app.db import get_raw_articles_collection, get_feed_metadata_collection
 from app.utils.helpers import clean_html, extract_tags_from_text
 
 settings = get_settings()
+logger = get_logger("app.fetcher")
 
 # Track consecutive feed failures to avoid hammering dead feeds
 _feed_failures: dict[str, int] = {}
@@ -122,7 +124,7 @@ async def fetch_feed(
             return articles, meta
 
     except Exception as e:
-        print(f"Error fetching {feed_url}: {e}")
+        logger.error(f"Error fetching {feed_url}: {e}", extra={"feed_url": feed_url, "error": str(e)})
         _record_failure(feed_url)
         return [], None
 
@@ -131,9 +133,9 @@ def _record_failure(feed_url: str):
     if _feed_failures[feed_url] >= FEED_FAILURE_THRESHOLD:
         skip_until = datetime.utcnow() + timedelta(minutes=FEED_SKIP_MINUTES)
         _feed_skip_until[feed_url] = skip_until
-        print(
-            f"Feed {feed_url} failed {FEED_FAILURE_THRESHOLD} times "
-            f"— skipping for {FEED_SKIP_MINUTES} min"
+        logger.warning(
+            f"Feed {feed_url} failed {FEED_FAILURE_THRESHOLD} times — skipping for {FEED_SKIP_MINUTES} min",
+            extra={"feed_url": feed_url, "failures": _feed_failures[feed_url]}
         )
 
 def _clean_boilerplate(text: str) -> str:
@@ -380,7 +382,7 @@ async def fetch_all_feeds() -> list[dict]:
         existing_meta = await meta_coll.find({}).to_list(length=200)
         metadata_map = {doc["feed_url"]: doc for doc in existing_meta if "feed_url" in doc}
     except Exception as e:
-        print(f"[fetcher] Could not load feed metadata: {e}")
+        logger.warning(f"Could not load feed metadata: {e}", extra={"error": str(e)})
 
     async with aiohttp.ClientSession(headers=headers) as session:
         tasks = []
@@ -426,7 +428,7 @@ async def fetch_all_feeds() -> list[dict]:
                 ]
                 await meta_coll.bulk_write(operations, ordered=False)
             except Exception as e:
-                print(f"[fetcher] Could not save feed metadata: {e}")
+                logger.warning(f"Could not save feed metadata: {e}", extra={"error": str(e)})
 
         # og:image fallback pass — for articles still missing an image
         og_tasks = []
@@ -443,9 +445,14 @@ async def fetch_all_feeds() -> list[dict]:
                     all_articles[idx]["image_url"] = og_url
 
     total_feeds = sum(len(fc.get("urls", [])) for fc in settings.rss_feeds.values())
-    print(
-        f"[fetcher] Fetched {len(all_articles)} articles from {total_feeds} feeds "
-        f"({not_modified_count} unchanged feeds skipped via HTTP 304)"
+    logger.info(
+        f"Fetched {len(all_articles)} articles from {total_feeds} feeds "
+        f"({not_modified_count} unchanged feeds skipped via HTTP 304)",
+        extra={
+            "articles_count": len(all_articles),
+            "total_feeds": total_feeds,
+            "http_304_skipped": not_modified_count,
+        }
     )
     return all_articles
 
@@ -460,7 +467,7 @@ async def save_raw_articles(articles: list[dict]) -> int:
     ]
     res = await collection.bulk_write(operations, ordered=False)
     saved = res.upserted_count
-    print(f"Saved {saved} new articles")
+    logger.info(f"Saved {saved} new raw articles to DB", extra={"saved_raw": saved})
     return saved
 
 async def fetch_and_store_feeds() -> int:

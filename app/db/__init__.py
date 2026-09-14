@@ -2,8 +2,10 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from redis.asyncio import from_url as redis_from_url
 from app.config import get_settings
+from app.logging import get_logger
 
-settings = get_settings()   
+settings = get_settings()
+logger = get_logger("app.db")   
 _mongo_client: AsyncIOMotorClient | None = None
 _database: AsyncIOMotorDatabase | None = None
 
@@ -68,13 +70,13 @@ async def connect_mongodb():
     # ── feed_metadata (Conditional HTTP 304 ETag / Last-Modified caching) ─────
     await _database.feed_metadata.create_index("feed_url", unique=True)
 
-    print(f"Connected to MongoDB: {settings.mongodb_database}")
+    logger.info(f"Connected to MongoDB: {settings.mongodb_database}")
 
 async def close_mongodb():
     global _mongo_client
     if _mongo_client:
         _mongo_client.close()
-        print("MongoDB connection closed")
+        logger.info("MongoDB connection closed")
 
 
 def get_database() -> AsyncIOMotorDatabase:
@@ -128,13 +130,13 @@ async def connect_redis():
 
     _redis_client = redis_from_url(redis_url, encoding="utf-8", decode_responses=True)
     await _redis_client.ping()
-    print("Connected to Redis")
+    logger.info("Connected to Redis")
 
 async def close_redis():
     global _redis_client
     if _redis_client:
         await _redis_client.close()
-        print("Redis connection closed")
+        logger.info("Redis connection closed")
 
 def get_redis() -> Any:
     return _redis_client
@@ -237,13 +239,9 @@ async def sync_views_to_mongodb():
                     {"$inc": {"views": count}}
                 )
         except Exception as e:
-            print(f"Error syncing views for {article_id}: {e}")
+            logger.error(f"Error syncing views for {article_id}: {e}", exc_info=True)
 
-
-# ─── Vote Management (Persistent + Redis-cached) ───────────────────────────────
 async def get_user_vote_status(article_id: str, user_id: str) -> str | None:
-    """Returns "up", "down", or None for the user's current vote on an article."""
-    # Check Redis cache first (fast path)
     client = get_redis()
     if client:
         cached = await client.get(f"user_vote:{article_id}:{user_id}")
@@ -266,7 +264,6 @@ async def get_user_vote_status(article_id: str, user_id: str) -> str | None:
     return None
 
 async def set_user_vote(article_id: str, user_id: str, vote_type: str | None):
-
     votes_coll = get_votes_collection()
     client = get_redis()
 

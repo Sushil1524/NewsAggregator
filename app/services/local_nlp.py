@@ -60,23 +60,29 @@ _KNOWN_PUBLISHERS = {
     r"sydney morning herald|smh": "The Sydney Morning Herald",
 }
 
-def normalize_publisher(source: str | None) -> str:
-    """Extract clean, concise publisher brand name from raw RSS channel metadata."""
-    if not source:
-        return "Publisher"
-    s = source.strip()
-    for pattern, clean_name in _KNOWN_PUBLISHERS.items():
-        if re.search(pattern, s, re.IGNORECASE):
-            return clean_name
+def normalize_publisher(source: str | None = None, url: str = "") -> str:
+    """Extract clean, concise publisher brand name from raw RSS channel metadata or article URL."""
+    s = (source or "").strip()
+    if s and s.lower() not in ("unknown", "publisher", "feed", "rss"):
+        for pattern, clean_name in _KNOWN_PUBLISHERS.items():
+            if re.search(pattern, s, re.IGNORECASE):
+                return clean_name
 
-    # Generic fallback: split on delimiters like ' - ', ' | ', ' — ', ' : '
-    parts = re.split(r"\s*[-–—|:]\s*", s)
-    if len(parts) > 1:
-        candidates = [p for p in parts if not re.search(r"\b(?:news|breaking|latest|today|real-time)\b", p, re.IGNORECASE)]
-        if candidates:
-            return candidates[0].strip()
-        return parts[0].strip()
-    return s
+        # Generic fallback: split on delimiters like ' - ', ' | ', ' — ', ' : '
+        parts = re.split(r"\s*[-–—|:]\s*", s)
+        if len(parts) > 1:
+            candidates = [p for p in parts if not re.search(r"\b(?:news|breaking|latest|today|real-time)\b", p, re.IGNORECASE)]
+            if candidates:
+                return candidates[0].strip()
+            return parts[0].strip()
+        return s
+
+    if url:
+        for pattern, clean_name in _KNOWN_PUBLISHERS.items():
+            if re.search(pattern, url, re.IGNORECASE):
+                return clean_name
+
+    return s or "News"
 
 # ---------------------------------------------------------------------------
 # 2. Wire & Preamble Stripper
@@ -161,7 +167,7 @@ _STOPWORDS = {
     "said", "says", "also", "just", "more", "than", "over",
 }
 
-def local_summarize(title: str, text: str, max_sentences: int = 4) -> Tuple[str, str]:
+def local_summarize(title: str, text: str = "", summary: str = "", max_sentences: int = 4) -> Tuple[str, str]:
     """
     Extractive summarizer with:
     1. Wire and byline stripping
@@ -170,7 +176,15 @@ def local_summarize(title: str, text: str, max_sentences: int = 4) -> Tuple[str,
     4. Structured takeaway formatting
     Returns: (summary_text, 'local_nlp')
     """
-    combined = f"{title}. {text}".strip() if title else text.strip()
+    if isinstance(summary, int):
+        max_sentences = summary
+        summary = ""
+
+    body = (text or "").strip()
+    if not body or len(body.split()) < 20:
+        body = (summary or "").strip() or body
+
+    combined = f"{title}. {body}".strip() if title else body.strip()
     cleaned = strip_wire_preamble(combined)
     sentences = split_into_sentences(cleaned)
 
@@ -215,6 +229,8 @@ _POS_WORDS: Dict[str, int] = {
     "breakthrough": 2, "triumph": 2, "miracle": 2, "milestone": 2, "historic": 2,
     "peace": 2, "victory": 2, "rebound": 2, "cure": 2, "rescue": 2, "innovative": 2,
     "celebrate": 2, "celebrates": 2, "celebrated": 2, "celebration": 2,
+    "richest": 2, "billionaire": 2, "windfall": 2, "soar": 2, "soared": 2, "soaring": 2, "soars": 2,
+    "thrive": 2, "thriving": 2, "record-breaking": 2, "record-high": 2,
     # Moderate positive (+1)
     "success": 1, "successful": 1, "profit": 1, "profits": 1, "profitable": 1,
     "surge": 1, "surged": 1, "surging": 1, "surges": 1,
@@ -222,20 +238,27 @@ _POS_WORDS: Dict[str, int] = {
     "recovery": 1, "recovered": 1, "recovering": 1, "deal": 1, "deals": 1, "agreement": 1, "agreements": 1,
     "approved": 1, "approval": 1, "strong": 1, "upgrade": 1, "upgraded": 1, "rally": 1, "rallied": 1, "rallies": 1,
     "promising": 1, "relief": 1, "relieved": 1, "progress": 1, "prosper": 1, "prosperity": 1,
+    "wealth": 1, "wealthy": 1, "fortune": 1, "swell": 1, "swells": 1, "swelled": 1,
     "revenue": 1, "revenues": 1, "accelerate": 1, "accelerated": 1, "accelerating": 1,
     "honored": 1, "award": 1, "awarded": 1, "awards": 1, "hope": 1, "hopeful": 1, "win": 1, "won": 1, "wins": 1,
+    "ipo": 1, "flotation": 1,
 }
 
 _NEG_WORDS: Dict[str, int] = {
-    # Strong negative verbs, violence, fatalities (+2)
+    # Strong negative verbs, violence, war, fatalities (+2)
     "die": 2, "dies": 2, "dying": 2, "dead": 2, "death": 2, "deaths": 2, "deadly": 2,
     "fatality": 2, "fatalities": 2, "fatal": 2, "kill": 2, "kills": 2, "killed": 2, "killing": 2, "killer": 2,
     "murder": 2, "murders": 2, "murdered": 2, "murderer": 2, "hostility": 2, "hostilities": 2, "hostile": 2,
     "strike": 2, "strikes": 2, "striking": 2, "struck": 2,
+    "hit": 2, "hits": 2, "hitting": 2, "blast": 2, "blasts": 2, "blasted": 2,
+    "explode": 2, "explodes": 2, "exploded": 2, "explosion": 2, "explosions": 2,
     "attack": 2, "attacks": 2, "attacked": 2, "attacking": 2, "bomb": 2, "bombed": 2, "bombing": 2, "bombs": 2,
+    "assault": 2, "assaults": 2, "assaulted": 2, "shelling": 2, "shelled": 2,
+    "invade": 2, "invaded": 2, "invasion": 2, "missile": 2, "missiles": 2,
+    "destroy": 2, "destroyed": 2, "destroys": 2, "destruction": 2,
     "disaster": 2, "catastrophe": 2, "crisis": 2, "tragedy": 2, "tragic": 2,
     "massacre": 2, "genocide": 2, "war": 2, "terrorist": 2, "terrorism": 2,
-    "hostage": 2, "hostages": 2, "crash": 2, "crashed": 2, "casualties": 2, "collapse": 2, "collapsed": 2,
+    "hostage": 2, "hostages": 2, "crash": 2, "crashed": 2, "casualties": 2, "casualty": 2, "collapse": 2, "collapsed": 2,
     "devastation": 2, "devastated": 2, "devastating": 2,
     # Moderate negative (-1)
     "scandal": 1, "corruption": 1, "fraud": 1, "fraudulent": 1, "layoff": 1, "layoffs": 1,
@@ -255,21 +278,22 @@ _NEGATION_WORDS = {
     "dont", "didnt", "isnt", "arent", "wasnt", "werent", "hasnt", "havent",
 }
 
-def local_sentiment(title: str, text: str = "") -> str:
+def local_sentiment(title: str, text: str = "") -> Tuple[str, float]:
     """
     High-accuracy sentiment engine tailored for news journalism:
     1. Regex word boundary matching.
     2. 3-word negation lookbehind.
     3. Fatal/violent/conflict verb prioritization.
+    Returns: (sentiment_label, score)
     """
     combined = f"{title} {text[:700]}".strip() if title else text[:700].strip()
     if not combined:
-        return "neutral"
+        return ("neutral", 0.5)
 
     text_lower = combined.lower()
     words = re.findall(r"\b[\w'-]+\b", text_lower)
     if not words:
-        return "neutral"
+        return ("neutral", 0.5)
 
     pos_score = 0
     neg_score = 0
@@ -293,21 +317,24 @@ def local_sentiment(title: str, text: str = "") -> str:
 
     diff = pos_score - neg_score
 
-    # Strong negative signals
-    if neg_score >= 2 or (neg_score >= 1 and pos_score == 0):
-        return "negative"
+    # Decisive negative signals (require at least 2 negative points or strong negative diff)
+    if neg_score >= 2 and diff <= -1:
+        confidence = round(min(0.95, 0.6 + 0.08 * neg_score), 2)
+        return ("negative", confidence)
 
-    # Strong positive signals
-    if pos_score >= 2 and neg_score == 0:
-        return "positive"
+    # Decisive positive signals (require at least 2 positive points or strong positive diff)
+    if pos_score >= 2 and diff >= 1:
+        confidence = round(min(0.95, 0.6 + 0.08 * pos_score), 2)
+        return ("positive", confidence)
 
-    # Decisive diff threshold
     if diff >= 2:
-        return "positive"
+        confidence = round(min(0.95, 0.55 + 0.08 * diff), 2)
+        return ("positive", confidence)
     if diff <= -2:
-        return "negative"
+        confidence = round(min(0.95, 0.55 + 0.08 * abs(diff)), 2)
+        return ("negative", confidence)
 
-    return "neutral"
+    return ("neutral", 0.50)
 
 # ---------------------------------------------------------------------------
 # 5. Topic Vector Category Classifier
@@ -324,7 +351,8 @@ _CATEGORY_KEYWORDS = {
         "market", "stock", "shares", "investor", "investors", "economy", "economic",
         "inflation", "bank", "banking", "fed", "rate hike", "quarterly", "revenue",
         "profit", "profits", "billion", "million", "acquisition", "merger", "trade deal",
-        "nasdaq", "dow", "crypto", "bitcoin", "startup", "layoffs"
+        "nasdaq", "dow", "crypto", "bitcoin", "startup", "layoffs", "ipo", "flotation",
+        "richest", "billionaire", "fortune", "wealth", "refinery", "earnings", "ceo"
     ],
     "Technology": [
         "ai", "artificial intelligence", "software", "tech", "technology", "app",

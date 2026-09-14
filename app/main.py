@@ -8,12 +8,15 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.config import get_settings
+from app.logging import setup_logging, get_logger
 from app.db import connect_mongodb, close_mongodb, get_clubs_collection
 from app.db import connect_redis, close_redis
 from app.scheduler import start_scheduler, stop_scheduler
 from app.routes import auth, articles, comments, bookmarks, admin, analytics, vocab, clubs, health
 
 settings = get_settings()
+setup_logging()
+logger = get_logger("app.main")
 
 # ─── Rate Limiter ──────────────────────────────────────────────────────────────
 # Global limiter — individual routes can override with their own @limiter.limit()
@@ -23,18 +26,18 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.dev_mode:
-        print("")
-        print("╔══════════════════════════════════════════════════╗")
-        print("║          IntelliNews — DEV MODE ACTIVE           ║")
-        print("║  Pipeline: DISABLED  |  Auth & API: ENABLED      ║")
-        print("║  Existing articles served normally from DB       ║")
-        print("╚══════════════════════════════════════════════════╝")
-        print("")
+        logger.info(
+            "IntelliNews DEV MODE active — Pipeline bypassed, auth & API enabled",
+            extra={"dev_mode": True}
+        )
+    else:
+        logger.info("Starting IntelliNews Backend Server in Production Mode")
+
     await connect_mongodb()
     try:
         await connect_redis()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}", extra={"error": str(e)})
 
     await seed_clubs()
     start_scheduler()
